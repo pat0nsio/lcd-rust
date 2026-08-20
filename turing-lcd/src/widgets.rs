@@ -4,31 +4,16 @@
 use crate::canvas::{Canvas, Rect, Rgb};
 
 /// Horizontal bar filled left-to-right by `fraction` (clamped to 0..=1).
-pub fn progress_bar(
-    canvas: &mut Canvas,
-    r: Rect,
-    fraction: f32,
-    fill: Rgb,
-    background: Rgb,
-    outline: Option<Rgb>,
-) {
+pub fn progress_bar(canvas: &mut Canvas, r: Rect, fraction: f32, fill: Rgb, background: Rgb) {
     if r.is_empty() {
         return;
     }
     canvas.fill_rect(r, background);
 
-    let inner = match outline {
-        Some(c) if r.w > 2 && r.h > 2 => {
-            canvas.stroke_rect(r, c);
-            Rect::new(r.x + 1, r.y + 1, r.w - 2, r.h - 2)
-        }
-        _ => r,
-    };
-
     let f = fraction.clamp(0.0, 1.0);
-    let filled = (inner.w as f32 * f).round() as u16;
+    let filled = (r.w as f32 * f).round() as u16;
     if filled > 0 {
-        canvas.fill_rect(Rect::new(inner.x, inner.y, filled, inner.h), fill);
+        canvas.fill_rect(Rect::new(r.x, r.y, filled, r.h), fill);
     }
 }
 

@@ -1,116 +1,177 @@
-# Tema por defecto de turing-monitor.
+# Tema por defecto de turing-monitor: "registrador de banda".
 #
-# Nada aqui lleva coordenadas absolutas: las secciones se apilan de arriba
-# abajo y las filas se apilan dentro de cada seccion, asi que este mismo
-# fichero sirve para 320x480 o para cualquier otro tamano de panel.
+# La forma viene de un registrador de papel continuo de laboratorio, y lo que
+# la define no es la paleta sino la estructura: en vez de una tarjeta por
+# metrica, hay UNA SOLA CINTA a todo el ancho donde tres plumas escriben
+# sobre el mismo papel. Las cifras quedan relegadas al margen, debajo.
+#
+# Que CPU, GPU y FPS compartan eje no es decoracion: es la unica forma de ver
+# cual de los tres va por detras de los otros, que es justo lo que se quiere
+# saber mientras se juega. Tres graficas separadas no lo ensenan.
+#
+# Todo el texto va en grafito y el color se reserva a las plumas. La barra
+# bajo cada cifra es a la vez su medida y su clave de color: la barra azul de
+# CPU identifica el trazo azul de la cinta. El rojo no pertenece a ningun
+# canal, solo aparece cuando algo se pasa de rosca.
+#
+# Pensado para la pantalla en horizontal (480x320): requiere
+# `orientation = landscape`. Nada lleva coordenadas absolutas.
 
 [theme]
-name = "default"
+name = "strip-chart"
 author = "turing-lcd-rs"
-margin = 8
-background = "bg"
+margin = 6
+background = "paper"
+columns = 2
+column_gap = 14
 
-# Los colores se declaran una sola vez y se referencian por nombre.
-# "panel" tiene un significado especial: es el fondo por defecto de barras
-# y graficos cuando una fila no dice otra cosa.
 [palette]
-bg    = "#0d1117"
-panel = "#21262d"
-text  = "#e6edf3"
-dim   = "#8b949e"
-warn  = "#f85149"
-cpu   = "#58a6ff"
-gpu   = "#bc8cff"
-ram   = "#3fb950"
-swap  = "#8b949e"
-disk  = "#d29922"
-rx    = "#39d353"
-tx    = "#f778ba"
+# El papel y la reticula impresa. "panel" es el fondo por defecto de barras
+# y graficos, asi que es la reticula quien lo ocupa.
+paper = "#e6e2d6"
+panel = "#cfc9b8"
+# Grafito para todo el texto, mas claro para las anotaciones.
+ink   = "#26251f"
+faint = "#6b675a"
+# Gris para las reglas: los dos limites de la cinta y los de la banda.
+line  = "#a29c8b"
+# El unico rojo del tema: solo aparece cuando algo se pasa de rosca.
+alarm = "#9b2c16"
+# Las plumas. Tintas de plotter, no colores de pantalla.
+cpu   = "#1f5673"
+gpu   = "#7d3f7d"
+fps   = "#1f6b6b"
+ram   = "#3d6b4a"
+vram  = "#8a5a1e"
 
 # ----------------------------------------------------------- cabecera
 [[section]]
+span = true
 gap = 6
 rows = [
-  { text = "sys.hostname", size = 18, style = "bold", color = "text",
-    right = "up {sys.uptime|uptime}", right_size = 12, right_style = "dim" },
-  { gap = 2 },
-  { rule = true },
+  { text = "sys.hostname", size = 22, style = "bold", color = "ink",
+    right = "up {sys.uptime|uptime}", right_size = 13, right_color = "faint" },
 ]
 
-# ----------------------------------------------------------- CPU
+# ----------------------------------------------------------- la cinta
+# El elemento que da nombre al tema y lo unico que ocupa el ancho entero.
+#
+# Sin titulo ni cifra: las dos reglas son la escala (arriba 100%, abajo 0) y
+# las plumas hablan solas. Las tres series son fracciones 0..1, asi que
+# comparten eje de verdad; fps.ratio se normaliza contra fps_target.
+#
+# `fill` igual a la reticula anula el relleno del sparkline: la primera serie
+# queda como trazo de pluma de un pixel, igual que las que se superponen.
+#
+# La pista de una barra por hilo que iba aqui debajo se quito al agrandar el
+# texto: repetia lo que ya dicen la cifra de CPU y su pluma, y su sitio lo
+# aprovecha mejor el trazo, que asi separa las tres plumas sin amontonarlas.
+# Se recupera anadiendo { cores = "cpu.cores", height = 12, color = "cpu" }.
+# Sin juego en marcha fps.ratio no tiene historico y esa pluma no escribe.
 [[section]]
-title = "CPU"
-value = "cpu.usage | percent"
-color = "cpu -> warn @ 0.7"
+span = true
+gap = 6
 rows = [
-  { text = "{cpu.model}  {cpu.freq|ghz}", style = "dim",
-    right = "cpu.temp | celsius", right_style = "dim",
-    right_color = "dim -> warn @ 0.8", right_color_from = "cpu.temp_ratio" },
-  { bar = "cpu.usage", height = 10 },
-  { cores = "cpu.cores", height = 14 },
-  { plot = "cpu.usage", height = 34, color = "cpu" },
+  { rule = true, track = "line" },
+  { plot = ["cpu.usage", "gpu.usage", "fps.ratio"], height = 52,
+    color = "cpu; gpu; fps", fill = "panel" },
+  { rule = true, track = "line" },
 ]
 
-# ----------------------------------------------------------- GPU
-# require: si no hay GPU AMD la metrica no existe y la seccion entera
-# desaparece, sin dejar hueco.
+# ----------------------------------------------------------- el margen
+# Las lecturas, en cuerpo pequeno y a dos columnas. Ya no son el asunto
+# principal: la cinta lo es.
 [[section]]
+column = 1
+title = "CPU"
+title_size = 20
+value = "cpu.usage | percent"
+value_size = 30
+color = "ink -> alarm @ 0.85"
+rows = [
+  # La temperatura es lo unico del panel que cambia de color, y a 26 px
+  # compite de tu a tu con el porcentaje: si algo se esta cociendo, se ve
+  # antes que se lee. color_from es obligatorio aqui — la rampa necesita una
+  # fraccion 0..1 y cpu.temp son grados, que saturarian el rojo siempre.
+  { text = "cpu.temp | celsius", size = 26,
+    color = "ink -> alarm @ 0.7", color_from = "cpu.temp_ratio",
+    right = "cpu.freq | ghz", right_size = 13, right_color = "faint" },
+  { bar = "cpu.usage", height = 10, color = "cpu" },
+]
+
+[[section]]
+column = 1
 title = "GPU"
+title_size = 20
 value = "gpu.usage | percent"
-color = "gpu -> warn @ 0.7"
+value_size = 30
+color = "ink -> alarm @ 0.85"
 require = "gpu.usage"
 rows = [
-  { text = "VRAM {gpu.vram_used|bytes} / {gpu.vram_total|bytes}", style = "dim",
-    right = "gpu.temp | celsius", right_style = "dim",
-    right_color = "dim -> warn @ 0.8", right_color_from = "gpu.temp_ratio" },
-  { bar = "gpu.usage", height = 10 },
-  { plot = "gpu.usage", height = 28, color = "gpu" },
+  { text = "gpu.temp | celsius", size = 26,
+    color = "ink -> alarm @ 0.7", color_from = "gpu.temp_ratio",
+    # Sin dato a la derecha: el driver no expone frecuencia de GPU y repetir
+    # aqui la VRAM, que ya tiene su propia lectura, seria ruido.
+    },
+  { bar = "gpu.usage", height = 10, color = "gpu" },
 ]
 
-# ----------------------------------------------------------- RAM
 [[section]]
+column = 2
 title = "RAM"
+title_size = 20
 value = "mem.usage | percent"
-color = "ram -> warn @ 0.85"
+value_size = 30
+color = "ink -> alarm @ 0.85"
 rows = [
-  { text = "{mem.used|bytes} / {mem.total|bytes}", style = "dim" },
-  { bar = "mem.usage", height = 10 },
-  # require por fila: sin swap, estas dos filas no existen y no dejan hueco.
-  { text = "SWAP {swap.used|bytes} / {swap.total|bytes}", style = "dim",
-    right = "swap.usage | percent", right_style = "dim", require = "swap.usage" },
-  { bar = "swap.usage", height = 6, color = "swap", require = "swap.usage" },
+  { text = "{mem.used|bytes} / {mem.total|bytes}", size = 14, color = "faint" },
+  { bar = "mem.usage", height = 10, color = "ram" },
 ]
 
-# ----------------------------------------------------------- disco
 [[section]]
-title = "DISK {disk.mount}"
-value = "disk.usage | percent"
-color = "disk -> warn @ 0.9"
+column = 2
+title = "VRAM"
+title_size = 20
+value = "gpu.vram_usage | percent"
+value_size = 30
+color = "ink -> alarm @ 0.85"
+require = "gpu.vram_usage"
 rows = [
-  { text = "{disk.used|bytes} / {disk.total|bytes}", style = "dim" },
-  { bar = "disk.usage", height = 10 },
+  { text = "{gpu.vram_used|bytes} / {gpu.vram_total|bytes}", size = 14, color = "faint" },
+  { bar = "gpu.vram_usage", height = 10, color = "vram" },
 ]
 
-# ----------------------------------------------------------- red
-# Desactivada. Las metricas net.* siguen disponibles: descomenta este bloque
-# para recuperarla. Es ademas el unico ejemplo de plot con dos series, que
-# comparten eje: scale = "auto" lo escala al mayor valor visto, con un suelo
-# interno para que el ruido en reposo no llene el grafico.
+# ----------------------------------------------------------- FPS
+# Cruza las dos columnas y solo existe mientras MangoHud escribe un log, asi
+# que aparece al arrancar el juego y se va sola al cerrarlo. El nombre del
+# programa va en el propio titulo para no gastar una fila en el.
 #
-# [[section]]
-# title = "NET"
-# value = "net.iface"
-# value_size = 11
-# value_style = "dim"
-# rows = [
-#   { text = "DN {net.rx|rate}", size = 13, color = "rx",
-#     right = "UP {net.tx|rate}", right_size = 13, right_color = "tx" },
-#   { plot = ["net.rx", "net.tx"], height = 28, scale = "auto", color = "rx; tx" },
-# ]
+# Unico canal cuya rampa va al reves: fps.ratio vale 0 cuando la cosa va mal,
+# de modo que la cifra arranca en rojo y llega al grafito en fps_target.
+[[section]]
+span = true
+title = "FPS  {fps.app}"
+title_size = 18
+value = "fps | int"
+value_size = 26
+color = "alarm -> ink"
+color_from = "fps.ratio"
+require = "fps"
+# Sin barra: la pluma de la cinta ya lleva el historico y una barra a 464 px
+# al 100% seria la cosa mas ruidosa del panel para decir que todo va bien.
+rows = []
 
 # ----------------------------------------------------------- pie
-[[section]]
-anchor = "bottom"
-rows = [
-  { text = "load {sys.load}", size = 12, style = "dim" },
-]
+# Quitado para que las dos temperaturas puedan ir a 26 px: era lo unico del
+# panel que no cambiaba (el modelo de CPU) o que ya contaba otro elemento (el
+# load, que es la pluma azul de la cinta). Es ademas el unico ejemplo de
+# `anchor = "bottom"`, asi que se queda aqui por si hace falta.
+#
+# [[section]]
+# anchor = "bottom"
+# span = true
+# rows = [
+#   { rule = true, track = "line" },
+#   { text = "cpu.model", size = 13, color = "faint",
+#     right = "load {sys.load}", right_size = 13, right_color = "faint" },
+# ]

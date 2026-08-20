@@ -107,17 +107,6 @@ impl Canvas {
         }
     }
 
-    /// 1px outline, drawn inside `r`.
-    pub fn stroke_rect(&mut self, r: Rect, color: Rgb) {
-        if r.is_empty() {
-            return;
-        }
-        self.fill_rect(Rect::new(r.x, r.y, r.w, 1), color);
-        self.fill_rect(Rect::new(r.x, r.bottom() - 1, r.w, 1), color);
-        self.fill_rect(Rect::new(r.x, r.y, 1, r.h), color);
-        self.fill_rect(Rect::new(r.right() - 1, r.y, 1, r.h), color);
-    }
-
     /// Blend `color` over the pixel at (x, y) with 8-bit coverage.
     #[inline]
     pub fn blend_pixel(&mut self, x: u16, y: u16, color: Rgb, alpha: u8) {

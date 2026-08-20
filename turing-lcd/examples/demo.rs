@@ -52,7 +52,6 @@ fn main() -> Result<(), String> {
             fraction,
             [0x58, 0xa6, 0xff],
             [0x21, 0x26, 0x2d],
-            Some([0x30, 0x36, 0x3d]),
         );
 
         // Only the pixels that changed since the previous frame are sent.

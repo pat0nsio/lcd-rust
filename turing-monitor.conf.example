@@ -12,7 +12,8 @@
 port = auto
 
 # portrait | reverse_portrait | landscape | reverse_landscape
-orientation = portrait
+# El tema por defecto esta pensado para apaisado.
+orientation = landscape
 
 # Retroiluminacion, 0-100.
 brightness = 60
@@ -35,6 +36,21 @@ disk = /
 # Con "none" en la etiqueta se coge el primer sensor del chip.
 cpu_temp_chip = k10temp
 cpu_temp_label = Tctl
+
+# Carpeta de logs de MangoHud, la misma que su `output_folder`. De ahi salen
+# las metricas fps, fps.ratio y fps.app: turing-monitor sigue el CSV que
+# MangoHud va escribiendo mientras el juego corre. Con "none" no hay FPS y la
+# seccion del tema que los muestra desaparece.
+#
+# En ~/.config/MangoHud/MangoHud.conf hace falta:
+#     output_folder=/home/<usuario>/mangologs
+#     autostart_log=1
+#     log_interval=500
+mangohud_folder = none
+
+# Fotogramas por segundo que se consideran "lleno": la barra de FPS y su
+# degradado de color van de rojo a verde entre 0 y este valor.
+fps_target = 60
 
 # Fuentes TTF propias. "none" usa las Roboto Mono incrustadas en el binario.
 font_regular = none

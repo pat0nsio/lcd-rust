@@ -87,12 +87,41 @@ Para arranque automático hay una unidad de usuario en
 
 ## Qué muestra
 
-Hostname y uptime · CPU (uso global, barra por hilo, histórico, frecuencia
-media y Tctl) · GPU AMD (uso, VRAM y temperatura vía sysfs `amdgpu`) ·
-RAM y swap · ocupación de disco · load average.
+El tema por defecto, `strip-chart`, es **apaisado (480x320)**; necesita
+`orientation = landscape` en la configuración.
 
-Hay además una sección de red desactivada en el tema por defecto; se
-recupera descomentando su bloque en `themes/default.toml`.
+La forma viene de un **registrador de banda** de laboratorio, y lo que lo
+define no es la paleta sino la estructura: en vez de una tarjeta por métrica,
+hay **una sola cinta a todo el ancho** donde tres plumas — CPU, GPU y FPS —
+escriben sobre el mismo papel, con las dos reglas como escala (100 % arriba,
+0 abajo). Las cifras quedan al margen, a dos columnas y a cuerpo grande: el
+panel son 3,5 pulgadas y se lee de reojo.
+
+Que los tres compartan eje no es decoración: es la única forma de ver cuál va
+por detrás de los otros, que es justo lo que se quiere saber mientras se
+juega. Tres gráficas separadas no lo enseñan.
+
+**Las temperaturas son elemento principal**: van a 26 px bajo su porcentaje y
+son lo único del panel que cambia de color, en grafito hasta los 70 °C y
+subiendo al rojo desde ahí. Si algo se está cociendo se ve antes de leerlo.
+Ojo al escribir una rampa sobre grados: `color_from` tiene que apuntar a
+`cpu.temp_ratio` / `gpu.temp_ratio`, porque la rampa espera una fracción 0..1
+y los grados en crudo saturarían el rojo siempre.
+
+El resto del texto va en grafito sobre papel hueso y el color se reserva a las
+plumas, en tintas de plotter. La barra bajo cada cifra es a la vez su medida y
+su clave de color: la barra azul de CPU identifica el trazo azul de la cinta.
+El rojo no pertenece a ningún canal — solo aparece cuando algo se pasa de
+rosca. Las series se dibujan como trazo de pluma de un píxel en vez de mancha
+degradada: `fill` igual a la retícula anula el relleno del sparkline.
+
+La cinta guarda una muestra por píxel de ancho, así que a 1 Hz son unos ocho
+minutos de historia y **entra por la derecha**, igual que el papel de un
+registrador: recién arrancado está casi vacía. Con `refresh_ms` más corto se
+llena antes.
+
+Hay además secciones de disco y de red desactivadas en el tema por defecto;
+se recuperan descomentando sus bloques en `themes/default.toml`.
 
 ## Temas
 
@@ -102,19 +131,28 @@ apilan dentro de cada una, así que el mismo tema sirve para 320x480 o para
 cualquier otro tamaño de panel.
 
 ```toml
+[theme]
+columns = 2                       # opcional; por defecto 1
+column_gap = 12
+
 [palette]
-cpu  = "#58a6ff"
-warn = "#f85149"
+panel = "#cfc9b8"                 # la reticula: fondo de barras y graficos
+ink   = "#26251f"
+alarm = "#9b2c16"
+cpu   = "#1f5673"
 
 [[section]]
+column = 1
 title = "CPU"
 value = "cpu.usage | percent"
-color = "cpu -> warn @ 0.7"       # degradado segun carga
+title_size = 20
+value_size = 30
+color = "ink -> alarm @ 0.85"     # degradado segun carga
 rows = [
-  { text = "{cpu.model}  {cpu.freq|ghz}", style = "dim" },
-  { bar   = "cpu.usage", height = 10 },
-  { cores = "cpu.cores", height = 14 },
-  { plot  = "cpu.usage", height = 34 },
+  { text = "cpu.freq | ghz", size = 11, color = "faint" },
+  { bar   = "cpu.usage", height = 8, color = "cpu" },
+  { cores = "cpu.cores", height = 14, color = "cpu" },
+  { plot  = "cpu.usage", height = 40, color = "cpu", fill = "panel" },
 ]
 ```
 
@@ -136,7 +174,7 @@ Ajustes: `height`, `size`, `style` (`normal`/`bold`/`dim`), `color`,
 **Métricas por nombre.** Los widgets se enlazan por cadena — `cpu.usage`,
 `gpu.temp`, `mem.used` — resueltas contra una tabla. Añadir una métrica es
 insertarla en `metrics.rs`; el motor de dibujo no necesita enterarse.
-`--list-metrics` imprime las 32 disponibles con su valor actual.
+`--list-metrics` imprime las disponibles con su valor actual.
 
 **Formateadores.** `metrica | formateador`, con `percent`, `celsius`,
 `bytes`, `rate`, `ghz`, `mhz`, `uptime`, `int`, `float1`, `float2`.
@@ -151,12 +189,26 @@ sección entera si esa métrica no existe en la máquina — sin GPU AMD no qued
 hueco. `require` también funciona por fila: así las líneas de swap
 desaparecen en un equipo sin swap.
 
+**Cuerpo de las secciones.** `title_size` y `value_size` fijan la línea de
+cabecera de cada sección, que crece con la mayor de las dos. Por defecto son
+15 y 20, que es lo que valía antes de existir estas claves.
+
 **Anclaje.** `anchor = "bottom"` fija una sección al borde inferior; el resto
 fluye desde arriba y se detiene antes de solaparla.
 
+**Columnas.** `columns` parte el área útil en varias columnas verticales y
+`column` (1-based) dice en cuál cae cada sección; cada columna lleva su propio
+flujo, así que una sección larga a la izquierda no empuja a las de la derecha.
+`span = true` cruza todas las columnas — es lo que hacen la cabecera y el pie
+del tema por defecto, y las columnas arrancan por debajo. Sin `columns` el
+comportamiento es el de siempre: una sola columna a todo el ancho.
+
 **Herramientas.** `--check-theme` valida el fichero, dice cuántos píxeles de
 alto consume frente a los disponibles, y avisa de secciones que no caben —
-que si no desaparecerían en silencio. `--dump fichero.ppm` renderiza sin
+que si no desaparecerían en silencio. Cuidado con una trampa: las secciones
+con `require` de una métrica ausente no se miden, así que el tema por defecto
+mide 268 px sin juego y 302 con él. Para comprobar el caso apretado hay que
+tener la métrica presente. `--dump fichero.ppm` renderiza sin
 tener la pantalla conectada. Las claves desconocidas son un error, no un
 campo ignorado: un `heigth` mal escrito se rechaza al arrancar.
 
@@ -164,7 +216,7 @@ campo ignorado: un `heigth` mal escrito se rechaza al arrancar.
 
 | | Original (YAML) | Aquí (TOML) |
 |---|---|---|
-| Posición | `X`/`Y` absolutos por widget | flujo vertical, sin coordenadas |
+| Posición | `X`/`Y` absolutos por widget | flujo vertical en columnas, sin coordenadas |
 | Resolución | un tema por tamaño de panel | el mismo tema en cualquiera |
 | Colores | literales repetidos por widget | paleta con nombres, una vez |
 | Métricas | árbol fijo cableado en el código | tabla por nombre, ampliable |
@@ -247,9 +299,12 @@ Probado contra el panel real:
   3.5" oficial.
 - Fotograma completo y refresco continuo a 1 Hz, con las cifras de la tabla
   de arriba.
-- 26 pruebas unitarias pasan (`cargo test`), incluidas las tramas de comando
+- 38 pruebas unitarias pasan (`cargo test`), incluidas las tramas de comando
   verificadas contra los valores que produce el código Python original, el
-  parseo de temas y los formateadores.
+  parseo de temas, el reparto en columnas, el seguimiento del CSV de MangoHud
+  y los formateadores.
+- FPS comprobados en vivo contra MangoHud 0.8.4: escribe el CSV a medida que
+  el juego corre, así que basta con leer el final del fichero.
 - Layout validado además sin hardware, renderizando a PPM con `--dump`.
 
 ## Licencia

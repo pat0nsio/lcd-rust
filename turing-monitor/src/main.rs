@@ -209,6 +209,48 @@ fn run() -> Result<(), String> {
     }
 }
 
+/// Canvas size for the offline commands, which never open the panel. The
+/// rev. A panel is 320x480 upright, so a rotated theme is laid out the other
+/// way round.
+fn canvas_size(orientation: turing_lcd::Orientation) -> (u16, u16) {
+    use turing_lcd::Orientation::*;
+    match orientation {
+        Portrait | ReversePortrait => (320, 480),
+        Landscape | ReverseLandscape => (480, 320),
+    }
+}
+
+/// Everything `--check-theme` and `--dump` need to lay a theme out without
+/// the panel plugged in.
+struct Offline {
+    canvas: Canvas,
+    renderer: Renderer,
+    sampler: Sampler,
+}
+
+impl Offline {
+    fn new(cfg: &Config, background: turing_lcd::Rgb) -> Result<Offline, String> {
+        let (w, h) = canvas_size(cfg.orientation);
+        Ok(Offline {
+            canvas: Canvas::new(w, h, background),
+            renderer: Renderer::new(cfg.font_regular.as_deref(), cfg.font_bold.as_deref(), w)?,
+            sampler: Sampler::new(cfg),
+        })
+    }
+
+    fn size(&self) -> (u16, u16) {
+        (self.canvas.width(), self.canvas.height())
+    }
+
+    /// Sample and draw one frame, handing back the metrics it used so a
+    /// caller can report on them without sampling a second time.
+    fn frame(&mut self, theme: &Theme) -> (render::RenderReport, Metrics) {
+        let m = self.sampler.sample();
+        let report = self.renderer.render(&mut self.canvas, theme, &m);
+        (report, m)
+    }
+}
+
 fn with_display<F>(cfg: &Config, f: F) -> Result<(), String>
 where
     F: FnOnce(&mut Display) -> Result<(), String>,
@@ -237,6 +279,8 @@ struct Sampler {
     net: stats::NetSampler,
     gpu: Option<stats::AmdGpu>,
     cpu_temp: Option<stats::TempSensor>,
+    fps: Option<stats::MangoHudFps>,
+    fps_target: f64,
     hostname: String,
     cpu_model: String,
     disk_mount: String,
@@ -252,6 +296,8 @@ impl Sampler {
             cpu_temp: stats::TempSensor::find(&cfg.cpu_temp_chip, cfg.cpu_temp_label.as_deref())
                 // Fall back to any sensor on that chip if the label moved.
                 .or_else(|| stats::TempSensor::find(&cfg.cpu_temp_chip, None)),
+            fps: cfg.mangohud_folder.as_deref().map(stats::MangoHudFps::new),
+            fps_target: cfg.fps_target,
             hostname: stats::hostname(),
             cpu_model: stats::cpu_model(),
             disk_mount: cfg.disk.clone(),
@@ -269,9 +315,9 @@ impl Sampler {
         m.set_text("sys.hostname", self.hostname.clone());
         m.set_num("sys.uptime", stats::uptime_secs() as f64);
         m.set_text("sys.load", format!("{l1:.2} {l5:.2} {l15:.2}"));
+        // Solo la de 1 minuto por separado: es la unica que sirve para una
+        // barra o una rampa. Las tres juntas ya van en sys.load como texto.
         m.set_num("sys.load1", l1 as f64);
-        m.set_num("sys.load5", l5 as f64);
-        m.set_num("sys.load15", l15 as f64);
 
         m.set_text("cpu.model", self.cpu_model.clone());
         m.set_num("cpu.usage", self.cpu.usage as f64);
@@ -317,6 +363,19 @@ impl Sampler {
         m.set_num("disk.free", disk.free as f64);
         m.set_num("disk.total", disk.total as f64);
 
+        // The fps keys stay undefined unless a game is logging right now, so
+        // `require` hides the section when nothing is running.
+        if let Some(src) = &mut self.fps {
+            if let Some(fps) = src.read() {
+                m.set_num("fps", fps as f64);
+                // Normalised copy, so bars and colour ramps have a 0..=1.
+                m.set_num("fps.ratio", (fps as f64 / self.fps_target).clamp(0.0, 1.0));
+                if let Some(app) = src.app() {
+                    m.set_text("fps.app", app);
+                }
+            }
+        }
+
         m.set_text("net.iface", self.net.interface().to_string());
         m.set_num("net.rx", self.net.rx_rate);
         m.set_num("net.tx", self.net.tx_rate);
@@ -342,20 +401,17 @@ fn cmd_check_theme(cfg: &Config, arg: Option<&str>) -> Result<(), String> {
     }
     println!("sections:  {}", theme.sections.len());
     println!("margin:    {}", theme.margin);
-
-    // Sample once so we can say which referenced metrics exist here.
-    let mut sampler = Sampler::new(cfg);
-    let m = sampler.sample();
-    let refs = render::referenced_metrics(&theme);
-    let missing: Vec<&String> = refs.iter().filter(|k| !m.has(k)).collect();
+    println!("columns:   {} (gap {})", theme.columns, theme.column_gap);
 
     // Lay the theme out on a real canvas so we can report sections that
-    // silently would not fit.
-    let mut canvas = Canvas::new(320, 480, theme.background);
-    let mut renderer = Renderer::new(cfg.font_regular.as_deref(), cfg.font_bold.as_deref(), 320)?;
-    let report = renderer.render(&mut canvas, &theme, &m);
+    // silently would not fit, and say which referenced metrics exist here.
+    let mut off = Offline::new(cfg, theme.background)?;
+    let (w, h) = off.size();
+    let (report, m) = off.frame(&theme);
+    let refs = render::referenced_metrics(&theme);
+    let missing: Vec<&String> = refs.iter().filter(|k| !m.has(k)).collect();
     println!(
-        "layout:    {} of {} px used at 320x480",
+        "layout:    {} of {} px used at {w}x{h}",
         report.used_height, report.available_height
     );
     warn_skipped(&report);
@@ -470,21 +526,18 @@ fn cmd_run(cfg: &Config, args: &Args) -> Result<(), String> {
 /// working on a theme without the panel plugged in.
 fn cmd_dump(cfg: &Config, args: &Args, path: &str) -> Result<(), String> {
     let theme = load_theme(cfg, args.theme.as_deref())?;
-    let (w, h) = (320u16, 480u16);
-    let mut canvas = Canvas::new(w, h, theme.background);
-    let mut sampler = Sampler::new(cfg);
-    let mut renderer = Renderer::new(cfg.font_regular.as_deref(), cfg.font_bold.as_deref(), w)?;
+    let mut off = Offline::new(cfg, theme.background)?;
+    let (w, h) = off.size();
 
     // A few quick passes so the history plots have something in them.
     let mut report = render::RenderReport::default();
     for _ in 0..60 {
-        let m = sampler.sample();
-        report = renderer.render(&mut canvas, &theme, &m);
+        report = off.frame(&theme).0;
         std::thread::sleep(Duration::from_millis(20));
     }
 
     let mut out = format!("P6\n{w} {h}\n255\n").into_bytes();
-    out.extend_from_slice(canvas.bytes());
+    out.extend_from_slice(off.canvas.bytes());
     std::fs::write(path, out).map_err(|e| format!("cannot write {path}: {e}"))?;
     println!("wrote {path} ({w}x{h}, theme `{}`)", theme.name);
     warn_skipped(&report);

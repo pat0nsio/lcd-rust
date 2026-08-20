@@ -31,12 +31,17 @@ struct Meta {
     author: Option<String>,
     margin: Option<u16>,
     background: Option<String>,
+    /// How many side-by-side columns the content area is split into.
+    columns: Option<u16>,
+    /// Horizontal space between those columns.
+    column_gap: Option<u16>,
 }
 
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 struct SectionDef {
     title: Option<String>,
+    title_size: Option<u16>,
     value: Option<String>,
     value_size: Option<u16>,
     value_style: Option<String>,
@@ -47,6 +52,10 @@ struct SectionDef {
     require: Option<String>,
     /// "top" (default) stacks in order; "bottom" pins to the bottom edge.
     anchor: Option<String>,
+    /// 1-based column this section flows down, for multi-column themes.
+    column: Option<u16>,
+    /// Draw across every column instead of inside one.
+    span: Option<bool>,
     gap: Option<u16>,
     #[serde(default)]
     rows: Vec<RowDef>,
@@ -188,11 +197,15 @@ pub enum Anchor {
 #[derive(Clone, Debug)]
 pub struct Section {
     pub title: Option<String>,
+    pub title_size: u16,
     pub value: Option<TextItem>,
     pub color: ColorSpec,
     pub color_from: Option<String>,
     pub require: Option<String>,
     pub anchor: Anchor,
+    /// 0-based column index; ignored when `span` is set.
+    pub column: usize,
+    pub span: bool,
     pub gap: u16,
     pub rows: Vec<RowEntry>,
 }
@@ -203,6 +216,8 @@ pub struct Theme {
     pub author: Option<String>,
     pub margin: u16,
     pub background: Rgb,
+    pub columns: u16,
+    pub column_gap: u16,
     pub sections: Vec<Section>,
 }
 
@@ -297,10 +312,15 @@ impl Theme {
             .copied()
             .unwrap_or([0x21, 0x26, 0x2d]);
 
+        let columns = file.theme.columns.unwrap_or(1);
+        if columns == 0 {
+            return Err("`columns` must be at least 1".into());
+        }
+
         let mut sections = Vec::new();
         for (i, s) in file.section.iter().enumerate() {
             sections.push(
-                compile_section(s, &palette, default_track)
+                compile_section(s, &palette, default_track, columns)
                     .map_err(|e| format!("section {} ({}): {e}", i + 1, s.title.as_deref().unwrap_or("untitled")))?,
             );
         }
@@ -310,6 +330,8 @@ impl Theme {
             author: file.theme.author.clone(),
             margin: file.theme.margin.unwrap_or(8),
             background,
+            columns,
+            column_gap: file.theme.column_gap.unwrap_or(10),
             sections,
         })
     }
@@ -320,7 +342,12 @@ impl Theme {
     }
 }
 
-fn compile_section(s: &SectionDef, p: &Palette, track: Rgb) -> Result<Section, String> {
+fn compile_section(
+    s: &SectionDef,
+    p: &Palette,
+    track: Rgb,
+    columns: u16,
+) -> Result<Section, String> {
     let color = match &s.color {
         Some(c) => p.color_spec(c)?,
         None => ColorSpec::Fixed(p.map.get("text").copied().unwrap_or([255, 255, 255])),
@@ -329,6 +356,17 @@ fn compile_section(s: &SectionDef, p: &Palette, track: Rgb) -> Result<Section, S
         None | Some("top") => Anchor::Top,
         Some("bottom") => Anchor::Bottom,
         Some(other) => return Err(format!("unknown anchor `{other}` (top, bottom)")),
+    };
+    // Columns are 1-based in the file so `column = 2` reads as "the second one".
+    let column = match s.column {
+        None => 0,
+        Some(0) => return Err("`column` is 1-based, so 0 is not a column".into()),
+        Some(n) if n <= columns => (n - 1) as usize,
+        Some(n) => {
+            return Err(format!(
+                "`column = {n}` but the theme only declares {columns} column(s)"
+            ))
+        }
     };
     let value = match &s.value {
         Some(v) => Some(TextItem {
@@ -352,11 +390,14 @@ fn compile_section(s: &SectionDef, p: &Palette, track: Rgb) -> Result<Section, S
 
     Ok(Section {
         title: s.title.clone(),
+        title_size: s.title_size.unwrap_or(15),
         value,
         color,
         color_from: s.color_from.clone(),
         require: s.require.clone(),
         anchor,
+        column,
+        span: s.span.unwrap_or(false),
         gap: s.gap.unwrap_or(6),
         rows,
     })
@@ -543,6 +584,42 @@ rows = [
         let t = Theme::parse(include_str!("../../themes/default.toml"))
             .expect("built-in theme must parse");
         assert!(!t.sections.is_empty());
+    }
+
+    #[test]
+    fn a_theme_without_columns_is_a_single_full_width_one() {
+        let t = Theme::parse(MINIMAL).unwrap();
+        assert_eq!(t.columns, 1);
+        assert_eq!(t.sections[0].column, 0);
+        assert!(!t.sections[0].span);
+    }
+
+    #[test]
+    fn columns_are_one_based_in_the_file_and_zero_based_after() {
+        let t = Theme::parse(
+            r##"
+[theme]
+columns = 2
+[[section]]
+column = 2
+rows = [ { bar = "x" } ]
+[[section]]
+span = true
+rows = [ { rule = true } ]
+"##,
+        )
+        .unwrap();
+        assert_eq!(t.sections[0].column, 1);
+        assert!(!t.sections[0].span);
+        assert!(t.sections[1].span);
+    }
+
+    #[test]
+    fn a_column_the_theme_does_not_have_is_an_error() {
+        let err = Theme::parse("[[section]]\ncolumn = 2\nrows = [ { bar = \"x\" } ]\n")
+            .expect_err("column 2 of a 1-column theme must be rejected");
+        assert!(err.contains("1 column"), "error should say why: {err}");
+        assert!(Theme::parse("[[section]]\ncolumn = 0\nrows = [ { bar = \"x\" } ]\n").is_err());
     }
 
     #[test]

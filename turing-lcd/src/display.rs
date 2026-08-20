@@ -7,7 +7,7 @@
 //! that actually differ go over the 115200-baud link — which is the real
 //! bottleneck, not CPU.
 
-use crate::canvas::{Canvas, Rect, Rgb};
+use crate::canvas::{Canvas, Rect};
 use crate::device::{Device, Orientation};
 
 /// Marker for "this row has no differences yet".
@@ -69,12 +69,6 @@ impl Display {
     /// Force the next flush to repaint everything.
     pub fn invalidate(&mut self) {
         self.shadow_valid = false;
-    }
-
-    pub fn clear(&mut self, color: Rgb) -> Result<(), String> {
-        self.canvas.clear(color);
-        self.invalidate();
-        Ok(())
     }
 
     /// Send whatever changed since the last flush.

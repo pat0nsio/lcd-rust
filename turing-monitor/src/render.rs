@@ -5,7 +5,7 @@
 //! anchored ones) and rows stack inside them. Nothing in a theme names a pixel
 //! coordinate, so the same theme works on any panel size.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, VecDeque};
 
 use turing_lcd::canvas::{Canvas, Rect};
 use turing_lcd::widgets::{progress_bar, sparkline};
@@ -16,27 +16,73 @@ use crate::theme::{Anchor, ColorSpec, Row, RowEntry, Scale, Section, Style, Text
 
 /// Fixed-capacity history of raw samples, oldest first.
 struct History {
-    values: Vec<f32>,
+    values: VecDeque<f32>,
+    /// Kept separately: `VecDeque` rounds its capacity up, so it is not a cap.
     cap: usize,
 }
 
 impl History {
     fn new(cap: usize) -> Self {
         History {
-            values: Vec::with_capacity(cap),
+            values: VecDeque::with_capacity(cap),
             cap,
         }
     }
 
     fn push(&mut self, v: f32) {
         if self.values.len() == self.cap {
-            self.values.remove(0);
+            self.values.pop_front();
         }
-        self.values.push(v);
+        self.values.push_back(v);
     }
 
     fn max(&self) -> f32 {
         self.values.iter().copied().fold(0.0, f32::max)
+    }
+}
+
+/// The content area split into side-by-side columns. `columns = 1` gives a
+/// single column the full width, which is the layout every theme had before
+/// columns existed.
+struct Columns {
+    count: usize,
+    /// Left edge of each column.
+    x: Vec<u16>,
+    width: u16,
+    /// Left edge and width of the whole content area, for spanning sections.
+    full_x: u16,
+    full_width: u16,
+}
+
+impl Columns {
+    fn new(theme: &Theme, margin: u16, content: u16) -> Columns {
+        let count = theme.columns.max(1);
+        let gaps = theme.column_gap.saturating_mul(count - 1);
+        // Gaps wider than the panel leave no room; fall back to one column
+        // rather than laying out zero-width ones.
+        let (count, gap, width) = match content.checked_sub(gaps).map(|w| w / count) {
+            Some(w) if w > 0 => (count as usize, theme.column_gap, w),
+            _ => (1, 0, content),
+        };
+        let x = (0..count)
+            .map(|i| margin + i as u16 * (width + gap))
+            .collect();
+        Columns {
+            count,
+            x,
+            width,
+            full_x: margin,
+            full_width: content,
+        }
+    }
+
+    /// Where a section is drawn, and which columns it consumes vertical space in.
+    fn place(&self, sec: &Section) -> (u16, u16, std::ops::Range<usize>) {
+        if sec.span || self.count == 1 {
+            return (self.full_x, self.full_width, 0..self.count);
+        }
+        let c = sec.column.min(self.count - 1);
+        (self.x[c], self.width, c..c + 1)
     }
 }
 
@@ -93,39 +139,71 @@ impl Renderer {
         if content == 0 {
             return report;
         }
+        let cols = Columns::new(theme, margin, content);
 
-        // Bottom-anchored sections are measured first so the top flow knows
-        // where it has to stop.
-        let mut bottom_y = canvas.height().saturating_sub(margin);
+        // Each column flows on its own, so every one carries its own pair of
+        // cursors. With `columns = 1` this is exactly the old single flow.
+        let n = cols.count;
+        let mut top = vec![margin; n];
+        let mut bottom = vec![canvas.height().saturating_sub(margin); n];
+
+        // Bottom-anchored sections are placed first so the top flows know
+        // where they have to stop.
         for sec in theme.sections.iter().rev() {
             if sec.anchor != Anchor::Bottom || !self.section_visible(sec, m) {
                 continue;
             }
-            let h = self.section(canvas, sec, m, margin, 0, content, false);
-            bottom_y = bottom_y.saturating_sub(h);
-            self.section(canvas, sec, m, margin, bottom_y, content, true);
-            bottom_y = bottom_y.saturating_sub(sec.gap);
+            let (x, w, span) = cols.place(sec);
+            let h = self.section(canvas, sec, m, x, 0, w, false);
+            // A spanning section has to clear the lowest of the columns it covers.
+            let y = span
+                .clone()
+                .map(|c| bottom[c])
+                .min()
+                .unwrap_or(margin)
+                .saturating_sub(h);
+            self.section(canvas, sec, m, x, y, w, true);
+            for c in span {
+                bottom[c] = y.saturating_sub(sec.gap);
+            }
         }
 
-        let mut y = margin;
         for sec in &theme.sections {
             if sec.anchor != Anchor::Top || !self.section_visible(sec, m) {
                 continue;
             }
-            let h = self.section(canvas, sec, m, margin, 0, content, false);
-            if y + h > bottom_y {
+            let (x, w, span) = cols.place(sec);
+            let h = self.section(canvas, sec, m, x, 0, w, false);
+            // Start below everything already in any column it covers.
+            let y = span.clone().map(|c| top[c]).max().unwrap_or(margin);
+            let floor = span.clone().map(|c| bottom[c]).min().unwrap_or(0);
+            if y + h > floor {
                 // Out of room: drop the section rather than overlap the footer.
                 report
                     .skipped
                     .push(sec.title.clone().unwrap_or_else(|| "untitled".into()));
                 continue;
             }
-            self.section(canvas, sec, m, margin, y, content, true);
-            y += h + sec.gap;
+            self.section(canvas, sec, m, x, y, w, true);
+            for c in span {
+                top[c] = y + h + sec.gap;
+            }
         }
 
-        report.used_height = y.saturating_sub(margin);
-        report.available_height = bottom_y.saturating_sub(margin);
+        // The report speaks for the tightest column, which is the one that
+        // decides whether the theme fits.
+        report.used_height = top
+            .iter()
+            .copied()
+            .max()
+            .unwrap_or(margin)
+            .saturating_sub(margin);
+        report.available_height = bottom
+            .iter()
+            .copied()
+            .min()
+            .unwrap_or(margin)
+            .saturating_sub(margin);
         report
     }
 
@@ -185,7 +263,7 @@ impl Renderer {
                         &title,
                         x as i32,
                         cursor as i32,
-                        15,
+                        sec.title_size,
                         self.text_color(Style::Bold, None, 0.0, color),
                         Align::Left,
                         VAlign::Top,
@@ -206,7 +284,10 @@ impl Renderer {
                     }
                 }
             }
-            cursor += 22;
+            // The heading line is as tall as the larger of the two faces on
+            // it, so a theme can scale titles and readings up together.
+            let value_size = sec.value.as_ref().map_or(0, |v| v.size);
+            cursor += sec.title_size.max(value_size) + 2;
         }
 
         for entry in &sec.rows {
@@ -275,14 +356,7 @@ impl Renderer {
                 if draw {
                     let v = self.normalized(metric, *scale, m);
                     let c = color.as_ref().unwrap_or(&sec.color).resolve(v);
-                    progress_bar(
-                        canvas,
-                        Rect::new(x, y, content, *height),
-                        v,
-                        c,
-                        *track,
-                        None,
-                    );
+                    progress_bar(canvas, Rect::new(x, y, content, *height), v, c, *track);
                 }
                 height + 4
             }
@@ -629,6 +703,59 @@ mod tests {
         m.set_num("mem.total", 33_000_000_000.0);
         m.set_text("cpu.model", "Ryzen 5 5600G");
         m
+    }
+
+    fn theme_with(columns: u16, gap: u16) -> Theme {
+        Theme {
+            name: "t".into(),
+            author: None,
+            margin: 8,
+            background: [0, 0, 0],
+            columns,
+            column_gap: gap,
+            sections: Vec::new(),
+        }
+    }
+
+    fn section(column: usize, span: bool) -> Section {
+        Section {
+            title: None,
+            title_size: 15,
+            value: None,
+            color: ColorSpec::Fixed([255, 255, 255]),
+            color_from: None,
+            require: None,
+            anchor: Anchor::Top,
+            column,
+            span,
+            gap: 6,
+            rows: Vec::new(),
+        }
+    }
+
+    #[test]
+    fn one_column_gives_every_section_the_full_width() {
+        let cols = Columns::new(&theme_with(1, 10), 8, 464);
+        let (x, w, span) = cols.place(&section(0, false));
+        assert_eq!((x, w), (8, 464));
+        assert_eq!(span, 0..1);
+    }
+
+    #[test]
+    fn two_columns_split_the_content_around_the_gap() {
+        let cols = Columns::new(&theme_with(2, 12), 8, 464);
+        assert_eq!(cols.place(&section(0, false)), (8, 226, 0..1));
+        assert_eq!(cols.place(&section(1, false)), (246, 226, 1..2));
+        // A spanning section covers the whole width and both columns.
+        assert_eq!(cols.place(&section(0, true)), (8, 464, 0..2));
+    }
+
+    #[test]
+    fn a_gap_wider_than_the_panel_falls_back_to_one_column() {
+        // Better a cramped single column than an underflowed width.
+        let cols = Columns::new(&theme_with(2, 600), 8, 464);
+        assert_eq!(cols.count, 1);
+        assert_eq!(cols.place(&section(1, false)), (8, 464, 0..1));
     }
 
     #[test]

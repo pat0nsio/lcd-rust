@@ -64,14 +64,6 @@ impl Font {
             .unwrap_or(size as f32 * 0.8)
     }
 
-    /// Natural distance between consecutive baselines.
-    pub fn line_height(&self, size: u16) -> f32 {
-        self.inner
-            .horizontal_line_metrics(size as f32)
-            .map(|m| m.new_line_size)
-            .unwrap_or(size as f32 * 1.2)
-    }
-
     fn glyph(&mut self, ch: char, size: u16) -> &Glyph {
         self.cache.entry((ch, size)).or_insert_with(|| {
             let (m, mask) = self.inner.rasterize(ch, size as f32);

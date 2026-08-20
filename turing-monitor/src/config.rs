@@ -21,6 +21,10 @@ pub struct Config {
     pub theme: Option<String>,
     pub cpu_temp_chip: String,
     pub cpu_temp_label: Option<String>,
+    /// MangoHud's `output_folder`; `None` leaves the fps metrics undefined.
+    pub mangohud_folder: Option<String>,
+    /// Frame rate treated as "full" by bars and colour ramps.
+    pub fps_target: f64,
     /// Blank the panel on exit instead of leaving the last frame up.
     pub screen_off_on_exit: bool,
 }
@@ -39,6 +43,8 @@ impl Default for Config {
             theme: None,
             cpu_temp_chip: "k10temp".into(),
             cpu_temp_label: Some("Tctl".into()),
+            mangohud_folder: None,
+            fps_target: 60.0,
             screen_off_on_exit: false,
         }
     }
@@ -84,12 +90,17 @@ impl Config {
                 "theme" => c.theme = opt(v),
                 "cpu_temp_chip" => c.cpu_temp_chip = v.to_string(),
                 "cpu_temp_label" => c.cpu_temp_label = opt(v),
+                "mangohud_folder" => c.mangohud_folder = opt(v),
+                "fps_target" => c.fps_target = parse_num(k, v)?,
                 "screen_off_on_exit" => c.screen_off_on_exit = parse_bool(k, v)?,
                 other => return Err(format!("unknown key `{other}`")),
             }
         }
         if c.brightness > 100 {
             return Err("brightness must be 0-100".into());
+        }
+        if c.fps_target <= 0.0 {
+            return Err("fps_target must be greater than zero".into());
         }
         Ok(c)
     }
