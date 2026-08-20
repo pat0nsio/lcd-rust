@@ -1,0 +1,13 @@
+[package]
+name = "turing-monitor"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+description = "Lightweight system monitor for Turing Smart Screen rev. A"
+
+[dependencies]
+turing-lcd = { path = "../turing-lcd" }
+libc = "0.2"
+serde = { version = "1", features = ["derive"] }
+toml = { version = "0.9", default-features = false, features = ["parse", "serde"] }

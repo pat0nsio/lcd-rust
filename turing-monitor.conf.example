@@ -1,0 +1,44 @@
+# turing-monitor - ejemplo de configuracion
+# Copiar a ~/.config/turing-monitor.conf
+# Las lineas vacias y lo que sigue a '#' se ignoran.
+#
+# Aqui va solo lo que toca al dispositivo y a las fuentes de datos.
+# El aspecto (colores, secciones, disposicion) vive en el tema: ver
+# themes/default.toml y la seccion "Temas" del README.
+
+# Puerto serie. "auto" busca el panel por VID:PID 1a86:5722 y numero de
+# serie USB35INCHIPSV2. Con la regla udev instalada tambien vale
+# /dev/turing-lcd.
+port = auto
+
+# portrait | reverse_portrait | landscape | reverse_landscape
+orientation = portrait
+
+# Retroiluminacion, 0-100.
+brightness = 60
+
+# Intervalo de refresco en milisegundos (minimo 100).
+refresh_ms = 1000
+
+# Tema. "none" usa el que va incrustado en el binario.
+theme = none
+
+# Interfaz de red a medir. "auto" elige la interfaz activa con mas trafico.
+# Las metricas net.* se calculan siempre, las use el tema o no.
+net_interface = auto
+
+# Punto de montaje del que se muestra la ocupacion.
+disk = /
+
+# Sensor de temperatura de CPU: nombre del chip hwmon y etiqueta.
+# AMD: k10temp / Tctl.  Intel: coretemp / "Package id 0".
+# Con "none" en la etiqueta se coge el primer sensor del chip.
+cpu_temp_chip = k10temp
+cpu_temp_label = Tctl
+
+# Fuentes TTF propias. "none" usa las Roboto Mono incrustadas en el binario.
+font_regular = none
+font_bold = none
+
+# Apagar la pantalla al salir en vez de dejar el ultimo fotograma.
+screen_off_on_exit = false

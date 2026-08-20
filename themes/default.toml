@@ -1,0 +1,116 @@
+# Tema por defecto de turing-monitor.
+#
+# Nada aqui lleva coordenadas absolutas: las secciones se apilan de arriba
+# abajo y las filas se apilan dentro de cada seccion, asi que este mismo
+# fichero sirve para 320x480 o para cualquier otro tamano de panel.
+
+[theme]
+name = "default"
+author = "turing-lcd-rs"
+margin = 8
+background = "bg"
+
+# Los colores se declaran una sola vez y se referencian por nombre.
+# "panel" tiene un significado especial: es el fondo por defecto de barras
+# y graficos cuando una fila no dice otra cosa.
+[palette]
+bg    = "#0d1117"
+panel = "#21262d"
+text  = "#e6edf3"
+dim   = "#8b949e"
+warn  = "#f85149"
+cpu   = "#58a6ff"
+gpu   = "#bc8cff"
+ram   = "#3fb950"
+swap  = "#8b949e"
+disk  = "#d29922"
+rx    = "#39d353"
+tx    = "#f778ba"
+
+# ----------------------------------------------------------- cabecera
+[[section]]
+gap = 6
+rows = [
+  { text = "sys.hostname", size = 18, style = "bold", color = "text",
+    right = "up {sys.uptime|uptime}", right_size = 12, right_style = "dim" },
+  { gap = 2 },
+  { rule = true },
+]
+
+# ----------------------------------------------------------- CPU
+[[section]]
+title = "CPU"
+value = "cpu.usage | percent"
+color = "cpu -> warn @ 0.7"
+rows = [
+  { text = "{cpu.model}  {cpu.freq|ghz}", style = "dim",
+    right = "cpu.temp | celsius", right_style = "dim",
+    right_color = "dim -> warn @ 0.8", right_color_from = "cpu.temp_ratio" },
+  { bar = "cpu.usage", height = 10 },
+  { cores = "cpu.cores", height = 14 },
+  { plot = "cpu.usage", height = 34, color = "cpu" },
+]
+
+# ----------------------------------------------------------- GPU
+# require: si no hay GPU AMD la metrica no existe y la seccion entera
+# desaparece, sin dejar hueco.
+[[section]]
+title = "GPU"
+value = "gpu.usage | percent"
+color = "gpu -> warn @ 0.7"
+require = "gpu.usage"
+rows = [
+  { text = "VRAM {gpu.vram_used|bytes} / {gpu.vram_total|bytes}", style = "dim",
+    right = "gpu.temp | celsius", right_style = "dim",
+    right_color = "dim -> warn @ 0.8", right_color_from = "gpu.temp_ratio" },
+  { bar = "gpu.usage", height = 10 },
+  { plot = "gpu.usage", height = 28, color = "gpu" },
+]
+
+# ----------------------------------------------------------- RAM
+[[section]]
+title = "RAM"
+value = "mem.usage | percent"
+color = "ram -> warn @ 0.85"
+rows = [
+  { text = "{mem.used|bytes} / {mem.total|bytes}", style = "dim" },
+  { bar = "mem.usage", height = 10 },
+  # require por fila: sin swap, estas dos filas no existen y no dejan hueco.
+  { text = "SWAP {swap.used|bytes} / {swap.total|bytes}", style = "dim",
+    right = "swap.usage | percent", right_style = "dim", require = "swap.usage" },
+  { bar = "swap.usage", height = 6, color = "swap", require = "swap.usage" },
+]
+
+# ----------------------------------------------------------- disco
+[[section]]
+title = "DISK {disk.mount}"
+value = "disk.usage | percent"
+color = "disk -> warn @ 0.9"
+rows = [
+  { text = "{disk.used|bytes} / {disk.total|bytes}", style = "dim" },
+  { bar = "disk.usage", height = 10 },
+]
+
+# ----------------------------------------------------------- red
+# Desactivada. Las metricas net.* siguen disponibles: descomenta este bloque
+# para recuperarla. Es ademas el unico ejemplo de plot con dos series, que
+# comparten eje: scale = "auto" lo escala al mayor valor visto, con un suelo
+# interno para que el ruido en reposo no llene el grafico.
+#
+# [[section]]
+# title = "NET"
+# value = "net.iface"
+# value_size = 11
+# value_style = "dim"
+# rows = [
+#   { text = "DN {net.rx|rate}", size = 13, color = "rx",
+#     right = "UP {net.tx|rate}", right_size = 13, right_color = "tx" },
+#   { plot = ["net.rx", "net.tx"], height = 28, scale = "auto", color = "rx; tx" },
+# ]
+
+# ----------------------------------------------------------- pie
+[[section]]
+anchor = "bottom"
+rows = [
+  { text = "load {sys.load}", size = 12, style = "dim" },
+]

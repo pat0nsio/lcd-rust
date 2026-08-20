@@ -1,0 +1,18 @@
+# Acceso al panel Turing Smart Screen rev. A sin privilegios de root.
+#
+# Instalar con:
+#   sudo cp 99-turing-smart-screen.rules /etc/udev/rules.d/
+#   sudo udevadm control --reload-rules
+#   sudo udevadm trigger --action=add /sys/class/tty/ttyACM0
+#
+# Ojo: "udevadm trigger" sin --action=add emite un evento "change", y el tag
+# uaccess solo se procesa en "add".
+#
+# uaccess por si solo puede no bastar: si logind no asigna este tty a un
+# asiento no concede ACL, y hace falta pertenecer al grupo uucp.
+#
+# Da el dispositivo al grupo "uucp" (Arch/CachyOS) y crea el enlace estable
+# /dev/turing-lcd, que se puede usar como `port` en la configuracion.
+SUBSYSTEM=="tty", ATTRS{idVendor}=="1a86", ATTRS{idProduct}=="5722", \
+  ATTRS{serial}=="USB35INCHIPSV2", MODE="0660", GROUP="uucp", \
+  SYMLINK+="turing-lcd", TAG+="uaccess"

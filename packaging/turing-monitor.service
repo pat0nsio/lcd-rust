@@ -1,0 +1,21 @@
+# Servicio de usuario. Instalar con:
+#   mkdir -p ~/.config/systemd/user
+#   cp turing-monitor.service ~/.config/systemd/user/
+#   systemctl --user daemon-reload && systemctl --user enable --now turing-monitor
+[Unit]
+Description=Turing Smart Screen system monitor
+After=graphical-session.target
+
+[Service]
+Type=simple
+ExecStart=%h/.local/bin/turing-monitor
+Restart=on-failure
+RestartSec=5
+# El proceso solo lee /proc, /sys y el tty del panel.
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=read-only
+PrivateTmp=true
+
+[Install]
+WantedBy=default.target

@@ -1,0 +1,9 @@
+# Artefactos de compilación
+/target/
+
+# Configuración local del usuario (usar turing-monitor.conf.example como plantilla)
+turing-monitor.conf
+
+# Capturas y volcados de depuración
+*.png
+*.raw
