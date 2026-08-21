@@ -87,41 +87,32 @@ Para arranque automático hay una unidad de usuario en
 
 ## Qué muestra
 
-El tema por defecto, `strip-chart`, es **apaisado (480x320)**; necesita
+El tema por defecto, `reading-sheet`, es **apaisado (480x320)**; necesita
 `orientation = landscape` en la configuración.
 
-La forma viene de un **registrador de banda** de laboratorio, y lo que lo
-define no es la paleta sino la estructura: en vez de una tarjeta por métrica,
-hay **una sola cinta a todo el ancho** donde tres plumas — CPU, GPU y FPS —
-escriben sobre el mismo papel, con las dos reglas como escala (100 % arriba,
-0 abajo). Las cifras quedan al margen, a dos columnas y a cuerpo grande: el
-panel son 3,5 pulgadas y se lee de reojo.
+Es una **hoja de lecturas** de laboratorio: papel hueso, texto en grafito y
+ni un solo marco. Lo que ordena la hoja es la escala tipográfica — cada
+magnitud se escribe grande, con su lectura secundaria debajo y una regla al
+pie que es a la vez su medida y su clave de color. El panel son 3,5 pulgadas
+y se lee de reojo, así que las cifras mandan.
 
-Que los tres compartan eje no es decoración: es la única forma de ver cuál va
-por detrás de los otros, que es justo lo que se quiere saber mientras se
-juega. Tres gráficas separadas no lo enseñan.
+Arriba, el nombre de la máquina y el tiempo encendida, separados por una
+regla. Debajo, cuatro magnitudes a dos columnas: **CPU y GPU** a la
+izquierda, **RAM y VRAM** a la derecha.
 
-**Las temperaturas son elemento principal**: van a 26 px bajo su porcentaje y
+**Las temperaturas son elemento principal**: van a 28 px bajo su porcentaje y
 son lo único del panel que cambia de color, en grafito hasta los 70 °C y
 subiendo al rojo desde ahí. Si algo se está cociendo se ve antes de leerlo.
 Ojo al escribir una rampa sobre grados: `color_from` tiene que apuntar a
 `cpu.temp_ratio` / `gpu.temp_ratio`, porque la rampa espera una fracción 0..1
 y los grados en crudo saturarían el rojo siempre.
 
-El resto del texto va en grafito sobre papel hueso y el color se reserva a las
-plumas, en tintas de plotter. La barra bajo cada cifra es a la vez su medida y
-su clave de color: la barra azul de CPU identifica el trazo azul de la cinta.
-El rojo no pertenece a ningún canal — solo aparece cuando algo se pasa de
-rosca. Las series se dibujan como trazo de pluma de un píxel en vez de mancha
-degradada: `fill` igual a la retícula anula el relleno del sparkline.
+El color se reserva a las reglas, en tintas de plotter, una por canal. El
+rojo no pertenece a ninguno — solo aparece cuando algo se pasa de rosca.
 
-La cinta guarda una muestra por píxel de ancho, así que a 1 Hz son unos ocho
-minutos de historia y **entra por la derecha**, igual que el papel de un
-registrador: recién arrancado está casi vacía. Con `refresh_ms` más corto se
-llena antes.
-
-Hay además secciones de disco y de red desactivadas en el tema por defecto;
-se recuperan descomentando sus bloques en `themes/default.toml`.
+**El pie es la única barra que no es un porcentaje**: una por hilo de CPU, el
+único dato del panel que no cabe en una cifra, a todo el ancho y con el
+modelo y el load como anotación al margen.
 
 ## Temas
 
@@ -299,12 +290,9 @@ Probado contra el panel real:
   3.5" oficial.
 - Fotograma completo y refresco continuo a 1 Hz, con las cifras de la tabla
   de arriba.
-- 38 pruebas unitarias pasan (`cargo test`), incluidas las tramas de comando
+- Las pruebas unitarias pasan (`cargo test`), incluidas las tramas de comando
   verificadas contra los valores que produce el código Python original, el
-  parseo de temas, el reparto en columnas, el seguimiento del CSV de MangoHud
-  y los formateadores.
-- FPS comprobados en vivo contra MangoHud 0.8.4: escribe el CSV a medida que
-  el juego corre, así que basta con leer el final del fichero.
+  parseo de temas, el reparto en columnas y los formateadores.
 - Layout validado además sin hardware, renderizando a PPM con `--dump`.
 
 ## Licencia

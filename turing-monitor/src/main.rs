@@ -279,8 +279,6 @@ struct Sampler {
     net: stats::NetSampler,
     gpu: Option<stats::AmdGpu>,
     cpu_temp: Option<stats::TempSensor>,
-    fps: Option<stats::MangoHudFps>,
-    fps_target: f64,
     hostname: String,
     cpu_model: String,
     disk_mount: String,
@@ -296,8 +294,6 @@ impl Sampler {
             cpu_temp: stats::TempSensor::find(&cfg.cpu_temp_chip, cfg.cpu_temp_label.as_deref())
                 // Fall back to any sensor on that chip if the label moved.
                 .or_else(|| stats::TempSensor::find(&cfg.cpu_temp_chip, None)),
-            fps: cfg.mangohud_folder.as_deref().map(stats::MangoHudFps::new),
-            fps_target: cfg.fps_target,
             hostname: stats::hostname(),
             cpu_model: stats::cpu_model(),
             disk_mount: cfg.disk.clone(),
@@ -362,19 +358,6 @@ impl Sampler {
         m.set_num("disk.used", disk.used() as f64);
         m.set_num("disk.free", disk.free as f64);
         m.set_num("disk.total", disk.total as f64);
-
-        // The fps keys stay undefined unless a game is logging right now, so
-        // `require` hides the section when nothing is running.
-        if let Some(src) = &mut self.fps {
-            if let Some(fps) = src.read() {
-                m.set_num("fps", fps as f64);
-                // Normalised copy, so bars and colour ramps have a 0..=1.
-                m.set_num("fps.ratio", (fps as f64 / self.fps_target).clamp(0.0, 1.0));
-                if let Some(app) = src.app() {
-                    m.set_text("fps.app", app);
-                }
-            }
-        }
 
         m.set_text("net.iface", self.net.interface().to_string());
         m.set_num("net.rx", self.net.rx_rate);
