@@ -33,8 +33,17 @@ struct Meta {
     background: Option<String>,
     /// How many side-by-side columns the content area is split into.
     columns: Option<u16>,
+    /// Relative widths of those columns; `[2, 3]` gives the second half again
+    /// as much room. Defaults to equal shares.
+    column_widths: Option<Vec<u16>>,
     /// Horizontal space between those columns.
     column_gap: Option<u16>,
+    /// Stroke of the frame round `frame = true` sections.
+    frame_width: Option<u16>,
+    /// Frame colour; defaults to the palette's `line`.
+    frame_color: Option<String>,
+    /// Frame colour of the one framed section with focus: the busiest.
+    focus_color: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -42,6 +51,8 @@ struct Meta {
 struct SectionDef {
     title: Option<String>,
     title_size: Option<u16>,
+    /// Title colour, when it should not follow the section's.
+    title_color: Option<String>,
     value: Option<String>,
     value_size: Option<u16>,
     value_style: Option<String>,
@@ -57,6 +68,12 @@ struct SectionDef {
     /// Draw across every column instead of inside one.
     span: Option<bool>,
     gap: Option<u16>,
+    /// Draw a window-style frame round the section.
+    frame: Option<bool>,
+    /// Space between the frame and the content.
+    padding: Option<u16>,
+    /// Stretch the section down to whatever is below it in its column.
+    grow: Option<bool>,
     #[serde(default)]
     rows: Vec<RowDef>,
 }
@@ -76,6 +93,7 @@ struct RowDef {
     right_color_from: Option<String>,
     bar: Option<String>,
     cores: Option<String>,
+    art: Option<String>,
     plot: Option<PlotRef>,
     height: Option<u16>,
     max: Option<f64>,
@@ -84,6 +102,8 @@ struct RowDef {
     track: Option<String>,
     rule: Option<bool>,
     gap: Option<u16>,
+    /// Let the left text wrap onto up to this many lines.
+    lines: Option<u16>,
     /// Skip just this row when the metric is undefined.
     require: Option<String>,
 }
@@ -147,6 +167,8 @@ pub struct TextItem {
     pub color: Option<ColorSpec>,
     /// Metric feeding the colour ramp, when it is not the one shown.
     pub load_from: Option<String>,
+    /// Most lines the text may wrap onto; 1 cuts it with an ellipsis.
+    pub lines: u16,
 }
 
 #[derive(Clone, Debug)]
@@ -161,6 +183,12 @@ pub enum Row {
         color: Option<ColorSpec>,
         track: Rgb,
         scale: Scale,
+    },
+    /// A square image — the album cover — filling the column width.
+    Art {
+        metric: String,
+        /// Cap on the side, when the column is wider than the art should be.
+        max: Option<u16>,
     },
     /// One slim vertical bar per element of a series.
     Cores {
@@ -198,6 +226,7 @@ pub enum Anchor {
 pub struct Section {
     pub title: Option<String>,
     pub title_size: u16,
+    pub title_color: Option<ColorSpec>,
     pub value: Option<TextItem>,
     pub color: ColorSpec,
     pub color_from: Option<String>,
@@ -207,6 +236,9 @@ pub struct Section {
     pub column: usize,
     pub span: bool,
     pub gap: u16,
+    pub frame: bool,
+    pub padding: u16,
+    pub grow: bool,
     pub rows: Vec<RowEntry>,
 }
 
@@ -218,6 +250,12 @@ pub struct Theme {
     pub background: Rgb,
     pub columns: u16,
     pub column_gap: u16,
+    /// One weight per column; empty means equal shares.
+    pub column_widths: Vec<u16>,
+    pub frame_width: u16,
+    pub frame_color: Rgb,
+    /// `None` leaves every frame in `frame_color`: no section takes focus.
+    pub focus_color: Option<Rgb>,
     pub sections: Vec<Section>,
 }
 
@@ -316,6 +354,18 @@ impl Theme {
         if columns == 0 {
             return Err("`columns` must be at least 1".into());
         }
+        let column_widths = file.theme.column_widths.clone().unwrap_or_default();
+        if !column_widths.is_empty() {
+            if column_widths.len() != columns as usize {
+                return Err(format!(
+                    "`column_widths` has {} entries but the theme declares {columns} column(s)",
+                    column_widths.len()
+                ));
+            }
+            if column_widths.iter().all(|w| *w == 0) {
+                return Err("`column_widths` cannot be all zeros".into());
+            }
+        }
 
         let mut sections = Vec::new();
         for (i, s) in file.section.iter().enumerate() {
@@ -332,6 +382,16 @@ impl Theme {
             background,
             columns,
             column_gap: file.theme.column_gap.unwrap_or(10),
+            column_widths,
+            frame_width: file.theme.frame_width.unwrap_or(2),
+            frame_color: match &file.theme.frame_color {
+                Some(s) => palette.color(s)?,
+                None => palette.map.get("line").copied().unwrap_or([0x2c, 0x2c, 0x2c]),
+            },
+            focus_color: match &file.theme.focus_color {
+                Some(s) => Some(palette.color(s)?),
+                None => None,
+            },
             sections,
         })
     }
@@ -375,6 +435,7 @@ fn compile_section(
             style: parse_style(&s.value_style)?,
             color: None, // Falls back to the section colour.
             load_from: s.color_from.clone(),
+            lines: 1,
         }),
         None => None,
     };
@@ -391,6 +452,7 @@ fn compile_section(
     Ok(Section {
         title: s.title.clone(),
         title_size: s.title_size.unwrap_or(15),
+        title_color: p.opt_spec(&s.title_color)?,
         value,
         color,
         color_from: s.color_from.clone(),
@@ -399,6 +461,9 @@ fn compile_section(
         column,
         span: s.span.unwrap_or(false),
         gap: s.gap.unwrap_or(6),
+        frame: s.frame.unwrap_or(false),
+        padding: s.padding.unwrap_or(8),
+        grow: s.grow.unwrap_or(false),
         rows,
     })
 }
@@ -422,6 +487,12 @@ fn compile_row(r: &RowDef, p: &Palette, default_track: Rgb) -> Result<Row, Strin
             color: p.opt_spec(&r.color)?,
             track,
             scale: parse_scale(r)?,
+        });
+    }
+    if let Some(metric) = &r.art {
+        return Ok(Row::Art {
+            metric: metric.clone(),
+            max: r.height,
         });
     }
     if let Some(metric) = &r.cores {
@@ -471,6 +542,7 @@ fn compile_row(r: &RowDef, p: &Palette, default_track: Rgb) -> Result<Row, Strin
                 style: parse_style(&r.style)?,
                 color: p.opt_spec(&r.color)?,
                 load_from: r.color_from.clone(),
+                lines: r.lines.unwrap_or(1),
             }),
             None => None,
         };
@@ -481,12 +553,13 @@ fn compile_row(r: &RowDef, p: &Palette, default_track: Rgb) -> Result<Row, Strin
                 style: parse_style(&r.right_style)?,
                 color: p.opt_spec(&r.right_color)?,
                 load_from: r.right_color_from.clone(),
+                lines: 1,
             }),
             None => None,
         };
         return Ok(Row::Text { left, right });
     }
-    Err("row has no recognised key (text, right, bar, cores, plot, rule, gap)".into())
+    Err("row has no recognised key (text, right, bar, cores, art, plot, rule, gap)".into())
 }
 
 #[cfg(test)]
@@ -584,6 +657,9 @@ rows = [
         let t = Theme::parse(include_str!("../../themes/default.toml"))
             .expect("built-in theme must parse");
         assert!(!t.sections.is_empty());
+        let t = Theme::parse(include_str!("../../themes/spotify.toml"))
+            .expect("spotify theme must parse");
+        assert!(!t.sections.is_empty());
     }
 
     #[test]
@@ -612,6 +688,20 @@ rows = [ { rule = true } ]
         assert_eq!(t.sections[0].column, 1);
         assert!(!t.sections[0].span);
         assert!(t.sections[1].span);
+    }
+
+    #[test]
+    fn column_widths_must_match_the_column_count() {
+        let ok = Theme::parse(
+            "[theme]\ncolumns = 2\ncolumn_widths = [2, 3]\n[[section]]\nrows = [ { bar = \"x\" } ]\n",
+        )
+        .unwrap();
+        assert_eq!(ok.column_widths, vec![2, 3]);
+        let err = Theme::parse(
+            "[theme]\ncolumns = 2\ncolumn_widths = [1]\n[[section]]\nrows = [ { bar = \"x\" } ]\n",
+        )
+        .expect_err("a short list must be rejected");
+        assert!(err.contains("1 entries"), "error should say why: {err}");
     }
 
     #[test]

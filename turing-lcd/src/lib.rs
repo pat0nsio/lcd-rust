@@ -11,7 +11,7 @@ pub mod display;
 pub mod text;
 pub mod widgets;
 
-pub use canvas::{Canvas, Rect, Rgb};
+pub use canvas::{Canvas, Image, Rect, Rgb};
 pub use device::{detect_port, Device, Orientation, SubRevision};
 pub use display::{Display, FlushStats};
 pub use text::{Align, Font, VAlign};

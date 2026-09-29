@@ -46,6 +46,55 @@ impl Rect {
     }
 }
 
+/// A decoded RGB888 image sitting in memory, e.g. an album cover. Rows are
+/// packed with no padding, exactly like [`Canvas`].
+#[derive(Clone)]
+pub struct Image {
+    pub w: u16,
+    pub h: u16,
+    pub px: Vec<u8>,
+}
+
+impl Image {
+    /// Resample into a `w * h` box, averaging every source pixel that falls
+    /// into each destination one. Scaling up repeats them instead.
+    ///
+    /// ponytail: caja simple, sin gamma ni filtro de reconstruccion. Para una
+    /// caratula de 640 px metida en 180 de panel no se distingue, y corre una
+    /// vez por cancion.
+    pub fn scaled(&self, w: u16, h: u16) -> Image {
+        let mut px = vec![0u8; w as usize * h as usize * 3];
+        if self.w == 0 || self.h == 0 || w == 0 || h == 0 {
+            return Image { w, h, px };
+        }
+        let (sw, sh) = (self.w as usize, self.h as usize);
+        for dy in 0..h as usize {
+            let y0 = dy * sh / h as usize;
+            let y1 = (((dy + 1) * sh).div_ceil(h as usize)).max(y0 + 1).min(sh);
+            for dx in 0..w as usize {
+                let x0 = dx * sw / w as usize;
+                let x1 = (((dx + 1) * sw).div_ceil(w as usize)).max(x0 + 1).min(sw);
+                let mut acc = [0u32; 3];
+                let mut n = 0u32;
+                for y in y0..y1 {
+                    let row = (y * sw + x0) * 3;
+                    for p in self.px[row..row + (x1 - x0) * 3].chunks_exact(3) {
+                        acc[0] += p[0] as u32;
+                        acc[1] += p[1] as u32;
+                        acc[2] += p[2] as u32;
+                        n += 1;
+                    }
+                }
+                let d = (dy * w as usize + dx) * 3;
+                for c in 0..3 {
+                    px[d + c] = (acc[c] / n.max(1)) as u8;
+                }
+            }
+        }
+        Image { w, h, px }
+    }
+}
+
 pub struct Canvas {
     w: u16,
     h: u16,
@@ -145,6 +194,21 @@ impl Canvas {
         }
     }
 
+    /// Copy an image in at (x, y), clipped to the canvas. Opaque: a cover has
+    /// no alpha to blend.
+    pub fn blit_image(&mut self, x: u16, y: u16, img: &Image) {
+        let r = Rect::new(x, y, img.w, img.h).clip(self.w, self.h);
+        if r.is_empty() {
+            return;
+        }
+        for row in 0..r.h {
+            let src = (row as usize * img.w as usize) * 3;
+            let dst = self.row_range(r.y + row, r.x, r.right());
+            let n = dst.len();
+            self.px[dst].copy_from_slice(&img.px[src..src + n]);
+        }
+    }
+
     /// Copy a sub-rectangle out as RGB565 little-endian, the wire format the
     /// panel expects. Writes into `out` so the caller can reuse one buffer.
     pub fn encode_rgb565(&self, r: Rect, out: &mut Vec<u8>) {
@@ -211,6 +275,30 @@ mod tests {
         assert_eq!(&c.bytes()[0..3], &[0, 0, 0]);
         c.blend_pixel(0, 0, [200, 100, 50], 255);
         assert_eq!(&c.bytes()[0..3], &[200, 100, 50]);
+    }
+
+    #[test]
+    fn scaling_averages_down_and_repeats_up() {
+        // 2x2: rojo, verde / azul, blanco. A 1x1 sale la media de los cuatro.
+        let src = Image {
+            w: 2,
+            h: 2,
+            px: vec![255, 0, 0, 0, 255, 0, 0, 0, 255, 255, 255, 255],
+        };
+        assert_eq!(src.scaled(1, 1).px, vec![127, 127, 127]);
+        // Ampliar repite, sin salirse ni panicar.
+        let up = src.scaled(4, 4);
+        assert_eq!(up.px.len(), 4 * 4 * 3);
+        assert_eq!(&up.px[0..3], &[255, 0, 0]);
+    }
+
+    #[test]
+    fn blit_image_clips_at_the_edge() {
+        let mut c = Canvas::new(4, 4, [0, 0, 0]);
+        let img = Image { w: 3, h: 3, px: vec![9; 27] };
+        c.blit_image(2, 2, &img);
+        assert_eq!(&c.row(3)[6..12], &[9, 9, 9, 9, 9, 9]);
+        assert_eq!(&c.row(1)[0..3], &[0, 0, 0]);
     }
 
     #[test]

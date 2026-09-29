@@ -17,6 +17,18 @@ pub fn progress_bar(canvas: &mut Canvas, r: Rect, fraction: f32, fill: Rgb, back
     }
 }
 
+/// The border of `r`, `width` pixels thick, drawn inside it.
+pub fn outline(canvas: &mut Canvas, r: Rect, width: u16, color: Rgb) {
+    let t = width.min(r.w / 2).min(r.h / 2);
+    if t == 0 {
+        return;
+    }
+    canvas.fill_rect(Rect::new(r.x, r.y, r.w, t), color);
+    canvas.fill_rect(Rect::new(r.x, r.bottom() - t, r.w, t), color);
+    canvas.fill_rect(Rect::new(r.x, r.y, t, r.h), color);
+    canvas.fill_rect(Rect::new(r.right() - t, r.y, t, r.h), color);
+}
+
 /// Interpolate between two colours; `t` is clamped to 0..=1.
 pub fn lerp_color(a: Rgb, b: Rgb, t: f32) -> Rgb {
     let t = t.clamp(0.0, 1.0);

@@ -6,14 +6,32 @@
 //! needs to know it exists.
 
 use std::collections::BTreeMap;
+use std::rc::Rc;
 
-#[derive(Clone, Debug)]
+use turing_lcd::Image;
+
+#[derive(Clone)]
 pub enum Value {
     /// A number in its natural unit; formatters turn it into text.
     Num(f64),
     Text(String),
     /// A set of related values, e.g. per-core load.
     Series(Vec<f32>),
+    /// Pixels — an album cover. Shared, so a frame costs a refcount and not a
+    /// copy of the bitmap.
+    Image(Rc<Image>),
+}
+
+impl std::fmt::Debug for Value {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Value::Num(v) => write!(f, "Num({v})"),
+            Value::Text(t) => write!(f, "Text({t:?})"),
+            Value::Series(s) => write!(f, "Series({} values)", s.len()),
+            // Una caratula no se vuelca en un log.
+            Value::Image(i) => write!(f, "Image({}x{})", i.w, i.h),
+        }
+    }
 }
 
 #[derive(Default)]
@@ -46,6 +64,10 @@ impl Metrics {
         }
     }
 
+    pub fn set_image(&mut self, key: &str, v: Rc<Image>) {
+        self.map.insert(key.to_string(), Value::Image(v));
+    }
+
     pub fn get(&self, key: &str) -> Option<&Value> {
         self.map.get(key)
     }
@@ -60,6 +82,13 @@ impl Metrics {
     pub fn series(&self, key: &str) -> Option<&[f32]> {
         match self.map.get(key)? {
             Value::Series(v) => Some(v),
+            _ => None,
+        }
+    }
+
+    pub fn image(&self, key: &str) -> Option<&Rc<Image>> {
+        match self.map.get(key)? {
+            Value::Image(v) => Some(v),
             _ => None,
         }
     }
@@ -87,6 +116,7 @@ pub fn format_value(v: f64, formatter: &str) -> String {
         "mhz" => format!("{v:.0} MHz"),
         "ghz" => format!("{:.2} GHz", v / 1000.0),
         "uptime" => fmt_uptime(v.max(0.0) as u64),
+        "clock" => fmt_clock(v.max(0.0) as u64),
         "int" => format!("{v:.0}"),
         "float1" => format!("{v:.1}"),
         "float2" => format!("{v:.2}"),
@@ -108,6 +138,16 @@ pub fn fmt_bytes(b: u64) -> String {
         format!("{:.0} {}", v, UNITS[u])
     } else {
         format!("{:.1} {}", v, UNITS[u])
+    }
+}
+
+/// `m:ss`, o `h:mm:ss` cuando la pista pasa de la hora.
+pub fn fmt_clock(secs: u64) -> String {
+    let (h, m, s) = (secs / 3600, (secs % 3600) / 60, secs % 60);
+    if h > 0 {
+        format!("{h}:{m:02}:{s:02}")
+    } else {
+        format!("{m}:{s:02}")
     }
 }
 
@@ -135,6 +175,8 @@ mod tests {
         assert_eq!(format_value(3813.0, "ghz"), "3.81 GHz");
         assert_eq!(format_value(1536.0, "rate"), "1.5 kB/s");
         assert_eq!(format_value(0.42, "float2"), "0.42");
+        assert_eq!(format_value(255.0, "clock"), "4:15");
+        assert_eq!(format_value(3725.0, "clock"), "1:02:05");
     }
 
     #[test]

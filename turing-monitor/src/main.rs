@@ -4,6 +4,7 @@
 mod config;
 mod metrics;
 mod render;
+mod spotify;
 mod stats;
 mod theme;
 
@@ -22,17 +23,24 @@ use theme::Theme;
 const BUILTIN_THEME: &str = include_str!("../../themes/default.toml");
 
 static RUNNING: AtomicBool = AtomicBool::new(true);
+/// Raised by SIGUSR1: the next frame switches to the other theme.
+static TOGGLE: AtomicBool = AtomicBool::new(false);
 
 extern "C" fn on_signal(_sig: libc::c_int) {
     RUNNING.store(false, Ordering::SeqCst);
 }
 
+extern "C" fn on_toggle(_sig: libc::c_int) {
+    TOGGLE.store(true, Ordering::SeqCst);
+}
+
 fn install_signal_handlers() {
-    // SAFETY: the handler only stores into an AtomicBool, which is
+    // SAFETY: the handlers only store into an AtomicBool, which is
     // async-signal-safe.
     unsafe {
         libc::signal(libc::SIGINT, on_signal as *const () as libc::sighandler_t);
         libc::signal(libc::SIGTERM, on_signal as *const () as libc::sighandler_t);
+        libc::signal(libc::SIGUSR1, on_toggle as *const () as libc::sighandler_t);
     }
 }
 
@@ -53,6 +61,7 @@ COMMANDS:
 OPTIONS:
     -c, --config <FILE>     Config file (default: ~/.config/turing-monitor.conf)
     -t, --theme <FILE>      Theme file (default: the one built in)
+        --theme-alt <FILE>  Second theme; SIGUSR1 alternates between the two
         --check-theme       Load the theme, report problems, and exit
         --list-metrics      Print every metric a theme can reference
     -p, --port <PATH>       Serial port, e.g. /dev/ttyACM0 (default: autodetect)
@@ -87,6 +96,7 @@ struct Args {
     show_stats: bool,
     dump: Option<String>,
     theme: Option<String>,
+    theme_alt: Option<String>,
     check_theme: bool,
     list_metrics: bool,
     value: Option<String>,
@@ -103,6 +113,7 @@ fn parse_args() -> Result<Option<Args>, String> {
         show_stats: false,
         dump: None,
         theme: None,
+        theme_alt: None,
         check_theme: false,
         list_metrics: false,
         value: None,
@@ -134,6 +145,7 @@ fn parse_args() -> Result<Option<Args>, String> {
             "--stats" => a.show_stats = true,
             "--dump" => a.dump = Some(next(arg)?),
             "-t" | "--theme" => a.theme = Some(next(arg)?),
+            "--theme-alt" => a.theme_alt = Some(next(arg)?),
             "--check-theme" => a.check_theme = true,
             "--list-metrics" => a.list_metrics = true,
             "run" | "detect" | "clear" | "on" | "off" | "reset" | "brightness" => {
@@ -178,6 +190,9 @@ fn run() -> Result<(), String> {
     }
     if let Some(r) = args.refresh {
         cfg.refresh_ms = r.max(100);
+    }
+    if let Some(t) = args.theme_alt.clone() {
+        cfg.theme_alt = Some(t);
     }
 
     if args.list_metrics {
@@ -282,6 +297,13 @@ struct Sampler {
     hostname: String,
     cpu_model: String,
     disk_mount: String,
+    /// Only ask the player when some theme in play actually shows it: it is
+    /// the one metric that costs a process instead of a file read.
+    want_spotify: bool,
+    /// Caratula en curso y la URL de la que salio, para bajarla una vez por
+    /// cancion y no una vez por fotograma.
+    art_url: String,
+    art: Option<std::rc::Rc<turing_lcd::Image>>,
 }
 
 impl Sampler {
@@ -297,6 +319,9 @@ impl Sampler {
             hostname: stats::hostname(),
             cpu_model: stats::cpu_model(),
             disk_mount: cfg.disk.clone(),
+            want_spotify: false,
+            art_url: String::new(),
+            art: None,
         }
     }
 
@@ -363,7 +388,57 @@ impl Sampler {
         m.set_num("net.rx", self.net.rx_rate);
         m.set_num("net.tx", self.net.tx_rate);
 
+        if self.want_spotify {
+            self.sample_spotify(&mut m);
+        }
+
         m
+    }
+
+    /// `spotify.status` existe siempre que se mire el reproductor, para que un
+    /// tema pueda decir "no suena nada". El resto de claves solo aparecen con
+    /// pista, asi que `require` las descarta sin dejar hueco.
+    fn sample_spotify(&mut self, m: &mut Metrics) {
+        let Some(np) = spotify::poll() else {
+            m.set_text("spotify.status", "sin reproductor");
+            self.art_url.clear();
+            self.art = None;
+            return;
+        };
+        // Solo al cambiar de pista: descargar y descodificar cuesta, dibujarla
+        // no. Si la descarga falla no se reintenta hasta la siguiente cancion.
+        if np.art_url != self.art_url {
+            self.art_url = np.art_url.clone();
+            self.art = spotify::art(&np.art_url).map(std::rc::Rc::new);
+        }
+        if let Some(art) = &self.art {
+            m.set_image("spotify.art", art.clone());
+        }
+        m.set_text(
+            "spotify.status",
+            match np.status.as_str() {
+                "Playing" => "sonando",
+                "Paused" => "en pausa",
+                _ => "parado",
+            },
+        );
+        for (key, value) in [
+            ("spotify.title", np.title),
+            ("spotify.artist", np.artist),
+            ("spotify.album", np.album),
+        ] {
+            if !value.is_empty() {
+                m.set_text(key, value);
+            }
+        }
+        // 1/0 para que un tema pueda encender algo solo mientras suena.
+        m.set_num("spotify.playing", (np.status == "Playing") as u8 as f64);
+        m.set_num("spotify.position", np.position);
+        // Sin duracion no hay barra: los anuncios no la publican.
+        if np.length > 0.0 {
+            m.set_num("spotify.length", np.length);
+            m.set_num("spotify.progress", (np.position / np.length).clamp(0.0, 1.0));
+        }
     }
 }
 
@@ -373,6 +448,24 @@ fn load_theme(cfg: &Config, arg: Option<&str>) -> Result<Theme, String> {
         Some(path) => Theme::load(path),
         None => Theme::parse(BUILTIN_THEME).map_err(|e| format!("built-in theme: {e}")),
     }
+}
+
+/// Todos los temas que el proceso puede mostrar: el principal y, si la
+/// configuracion lo nombra, el alterno. SIGUSR1 va rotando por la lista.
+fn load_themes(cfg: &Config, arg: Option<&str>) -> Result<Vec<Theme>, String> {
+    let mut themes = vec![load_theme(cfg, arg)?];
+    if let Some(path) = &cfg.theme_alt {
+        themes.push(Theme::load(path)?);
+    }
+    Ok(themes)
+}
+
+/// Whether a theme shows anything from the player, which is what decides if
+/// the sampler bothers asking for it.
+fn uses_spotify(theme: &Theme) -> bool {
+    render::referenced_metrics(theme)
+        .iter()
+        .any(|k| k.starts_with("spotify."))
 }
 
 fn cmd_check_theme(cfg: &Config, arg: Option<&str>) -> Result<(), String> {
@@ -389,6 +482,7 @@ fn cmd_check_theme(cfg: &Config, arg: Option<&str>) -> Result<(), String> {
     // Lay the theme out on a real canvas so we can report sections that
     // silently would not fit, and say which referenced metrics exist here.
     let mut off = Offline::new(cfg, theme.background)?;
+    off.sampler.want_spotify = uses_spotify(&theme);
     let (w, h) = off.size();
     let (report, m) = off.frame(&theme);
     let refs = render::referenced_metrics(&theme);
@@ -426,6 +520,8 @@ fn warn_skipped(report: &render::RenderReport) {
 
 fn cmd_list_metrics(cfg: &Config) -> Result<(), String> {
     let mut sampler = Sampler::new(cfg);
+    // Nadie ha pedido un tema aqui, asi que se listan todas las metricas.
+    sampler.want_spotify = true;
     // Two passes: rates and CPU load need a delta to be non-zero.
     let _ = sampler.sample();
     std::thread::sleep(Duration::from_millis(300));
@@ -437,6 +533,7 @@ fn cmd_list_metrics(cfg: &Config) -> Result<(), String> {
             metrics::Value::Num(v) => ("num", format!("{v:.4}")),
             metrics::Value::Text(t) => ("text", t.clone()),
             metrics::Value::Series(s) => ("series", format!("{} values", s.len())),
+            metrics::Value::Image(i) => ("image", format!("{}x{} px", i.w, i.h)),
         };
         println!("{key:<20} {kind:<8} {shown}");
     }
@@ -446,12 +543,16 @@ fn cmd_list_metrics(cfg: &Config) -> Result<(), String> {
 fn cmd_run(cfg: &Config, args: &Args) -> Result<(), String> {
     install_signal_handlers();
 
-    let theme = load_theme(cfg, args.theme.as_deref())?;
+    let themes = load_themes(cfg, args.theme.as_deref())?;
+    let mut current = 0usize;
     let mut display = Display::open(cfg.port.as_deref(), cfg.orientation)?;
     display.device_mut().set_brightness(cfg.brightness)?;
     display.device_mut().screen_on()?;
 
     let mut sampler = Sampler::new(cfg);
+    // Por tema, no por proceso: con la hoja de metricas delante no se le
+    // pregunta nada al reproductor.
+    let wants_spotify: Vec<bool> = themes.iter().map(uses_spotify).collect();
     let mut renderer = Renderer::new(
         cfg.font_regular.as_deref(),
         cfg.font_bold.as_deref(),
@@ -461,8 +562,14 @@ fn cmd_run(cfg: &Config, args: &Args) -> Result<(), String> {
 
     while RUNNING.load(Ordering::SeqCst) {
         let started = Instant::now();
+        if TOGGLE.swap(false, Ordering::SeqCst) {
+            current = (current + 1) % themes.len();
+            // Otro tema es otro fondo: se reenvia el fotograma entero.
+            display.invalidate();
+        }
+        sampler.want_spotify = wants_spotify[current];
         let m = sampler.sample();
-        let _ = renderer.render(display.canvas(), &theme, &m);
+        let _ = renderer.render(display.canvas(), &themes[current], &m);
 
         match display.flush() {
             Ok(s) if args.show_stats => eprintln!(
@@ -492,8 +599,11 @@ fn cmd_run(cfg: &Config, args: &Args) -> Result<(), String> {
             return Ok(());
         }
         // Sleep in short slices so Ctrl-C is picked up promptly.
+        // El mismo troceado atiende al cambio de tema, para que la tecla no
+        // tarde un refresco entero en notarse.
         let deadline = started + interval;
-        while RUNNING.load(Ordering::SeqCst) && Instant::now() < deadline {
+        while RUNNING.load(Ordering::SeqCst) && !TOGGLE.load(Ordering::SeqCst) && Instant::now() < deadline
+        {
             let left = deadline.saturating_duration_since(Instant::now());
             std::thread::sleep(left.min(Duration::from_millis(100)));
         }
@@ -510,6 +620,7 @@ fn cmd_run(cfg: &Config, args: &Args) -> Result<(), String> {
 fn cmd_dump(cfg: &Config, args: &Args, path: &str) -> Result<(), String> {
     let theme = load_theme(cfg, args.theme.as_deref())?;
     let mut off = Offline::new(cfg, theme.background)?;
+    off.sampler.want_spotify = uses_spotify(&theme);
     let (w, h) = off.size();
 
     // A few quick passes so the history plots have something in them.

@@ -24,6 +24,11 @@ refresh_ms = 1000
 # Tema. "none" usa el que va incrustado en el binario.
 theme = none
 
+# Segundo tema. Con uno puesto aqui, SIGUSR1 alterna entre los dos sin
+# reiniciar:  pkill -USR1 -x turing-monitor
+# Es lo que hace el atajo de teclado descrito en el README.
+theme_alt = none
+
 # Interfaz de red a medir. "auto" elige la interfaz activa con mas trafico.
 # Las metricas net.* se calculan siempre, las use el tema o no.
 net_interface = auto
@@ -38,6 +43,11 @@ cpu_temp_chip = k10temp
 cpu_temp_label = Tctl
 
 # Fuentes TTF propias. "none" usa las Roboto Mono incrustadas en el binario.
+# Se carga la fuente entera en memoria, glifo a glifo: una Nerd Font (~10.000
+# iconos) pasa el proceso de 9 MB a 106. Recortada a latin se queda en 7:
+#   uvx --from fonttools pyftsubset JetBrainsMonoNerdFont-Regular.ttf \
+#     --unicodes="U+0020-024F,U+2000-206F,U+20AC,U+2190-21FF,U+2500-259F" \
+#     --layout-features='*' --no-hinting --output-file=JetBrainsMono-Regular-latin.ttf
 font_regular = none
 font_bold = none
 

@@ -1,0 +1,90 @@
+# Tema "now-playing": el mismo escritorio, con Spotify en primer plano.
+#
+# Misma barra, mismos marcos y misma paleta que el tema de metricas (Mono
+# Burgundy), para que SUPER + ALT + M se sienta como cambiar de workspace y
+# no de aplicacion.
+#
+# Tres ventanas: la caratula, los creditos y el transporte. El foco en bordo
+# es de la caratula mientras suena; en pausa se apaga y todo queda en gris,
+# igual que waybar atenua el modulo de mpris.
+#
+# Sin reproductor la barra de arriba sigue ahi y dice "sin reproductor": las
+# ventanas llevan `require` y desaparecen enteras.
+#
+# Apaisado (480x320): requiere `orientation = landscape`. Los pesos de las
+# columnas, 109:116, dan a la caratula justo los 218 px que quedan entre la
+# barra y el transporte, asi que su ventana es exactamente cuadrada.
+
+[theme]
+name = "now-playing"
+author = "turing-lcd-rs"
+margin = 10
+background = "base"
+columns = 2
+column_widths = [109, 116]
+column_gap = 10
+frame_width = 2
+frame_color = "line"
+focus_color = "accent"
+
+[palette]
+base   = "#0b0b0b"
+line   = "#2c2c2c"
+dim    = "#505050"
+muted  = "#8a8a8a"
+fg     = "#c8c8c8"
+bright = "#ededed"
+accent = "#b8455a"
+
+# ----------------------------------------------------------- la barra
+[[section]]
+span = true
+gap = 10
+rows = [
+  { text = "sys.hostname", size = 14, color = "fg",
+    right = "spotify.status", right_size = 14, right_color = "muted" },
+  { rule = true, track = "line" },
+]
+
+# ----------------------------------------------------------- la caratula
+# Sin relleno: el borde abraza la imagen como a una ventana. Sin caratula
+# (un anuncio, otro reproductor) la ventana desaparece.
+[[section]]
+column = 1
+frame = true
+padding = 0
+color_from = "spotify.playing"
+require = "spotify.art"
+rows = [
+  { art = "spotify.art" },
+]
+
+# ----------------------------------------------------------- los creditos
+[[section]]
+column = 2
+frame = true
+padding = 10
+grow = true
+require = "spotify.title"
+rows = [
+  # El titulo parte en lineas en vez de cortarse: la ventana tiene alto de
+  # sobra y el titulo es lo que se busca de un vistazo.
+  { text = "spotify.title", size = 20, style = "bold", color = "bright", lines = 3 },
+  { gap = 6 },
+  { text = "spotify.artist", size = 16, color = "fg" },
+  { gap = 2 },
+  { text = "spotify.album", size = 14, color = "muted" },
+]
+
+# ----------------------------------------------------------- el transporte
+# Los anuncios no publican duracion: sin `spotify.progress` no hay ventana.
+[[section]]
+span = true
+anchor = "bottom"
+frame = true
+require = "spotify.progress"
+rows = [
+  { bar = "spotify.progress", height = 6, color = "fg", track = "line" },
+  { text = "spotify.position | clock", size = 13, color = "muted",
+    right = "spotify.length | clock", right_size = 13, right_color = "muted" },
+]

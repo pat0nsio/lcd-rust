@@ -6,10 +6,11 @@
 //! coordinate, so the same theme works on any panel size.
 
 use std::collections::{HashMap, VecDeque};
+use std::rc::Rc;
 
 use turing_lcd::canvas::{Canvas, Rect};
-use turing_lcd::widgets::{progress_bar, sparkline};
-use turing_lcd::{Align, Font, Rgb, VAlign};
+use turing_lcd::widgets::{outline, progress_bar, sparkline};
+use turing_lcd::{Align, Font, Image, Rgb, VAlign};
 
 use crate::metrics::{format_value, Metrics, Value};
 use crate::theme::{Anchor, ColorSpec, Row, RowEntry, Scale, Section, Style, TextItem, Theme};
@@ -48,7 +49,8 @@ struct Columns {
     count: usize,
     /// Left edge of each column.
     x: Vec<u16>,
-    width: u16,
+    /// Width of each column; equal shares unless the theme weighted them.
+    widths: Vec<u16>,
     /// Left edge and width of the whole content area, for spanning sections.
     full_x: u16,
     full_width: u16,
@@ -60,17 +62,36 @@ impl Columns {
         let gaps = theme.column_gap.saturating_mul(count - 1);
         // Gaps wider than the panel leave no room; fall back to one column
         // rather than laying out zero-width ones.
-        let (count, gap, width) = match content.checked_sub(gaps).map(|w| w / count) {
-            Some(w) if w > 0 => (count as usize, theme.column_gap, w),
-            _ => (1, 0, content),
+        let Some(avail) = content.checked_sub(gaps).filter(|w| *w >= count) else {
+            return Columns {
+                count: 1,
+                x: vec![margin],
+                widths: vec![content],
+                full_x: margin,
+                full_width: content,
+            };
         };
-        let x = (0..count)
-            .map(|i| margin + i as u16 * (width + gap))
+        // `column_widths` are relative shares, so a theme stays independent of
+        // the panel size. Without them every column gets the same slice.
+        let weights: Vec<u16> = match theme.column_widths.len() == count as usize {
+            true => theme.column_widths.clone(),
+            false => vec![1; count as usize],
+        };
+        let total: u32 = weights.iter().map(|w| *w as u32).sum::<u32>().max(1);
+        let widths: Vec<u16> = weights
+            .iter()
+            .map(|w| ((avail as u32 * *w as u32 / total) as u16).max(1))
             .collect();
+        let mut x = Vec::with_capacity(count as usize);
+        let mut cursor = margin;
+        for w in &widths {
+            x.push(cursor);
+            cursor += w + theme.column_gap;
+        }
         Columns {
-            count,
+            count: count as usize,
             x,
-            width,
+            widths,
             full_x: margin,
             full_width: content,
         }
@@ -82,7 +103,7 @@ impl Columns {
             return (self.full_x, self.full_width, 0..self.count);
         }
         let c = sec.column.min(self.count - 1);
-        (self.x[c], self.width, c..c + 1)
+        (self.x[c], self.widths[c], c..c + 1)
     }
 }
 
@@ -104,7 +125,19 @@ pub struct Renderer {
     /// One history per metric that some plot references.
     history: HashMap<String, History>,
     history_cap: usize,
+    /// The cover, already resampled to the box it is drawn in. Kept until the
+    /// track or the layout changes, so a frame is a memcpy and nothing else.
+    art: Option<(Rc<Image>, u16, Image)>,
+    /// Index of the framed section drawn in the theme's `focus_color`.
+    focus: Option<usize>,
 }
+
+/// How much busier another section must be to take the focus away, so two
+/// tiles at about the same load do not trade it every frame.
+const FOCUS_HYSTERESIS: f32 = 0.05;
+
+/// Every row leaves this much space under itself.
+const ROW_TRAIL: u16 = 4;
 
 impl Renderer {
     pub fn new(
@@ -126,12 +159,15 @@ impl Renderer {
             history: HashMap::new(),
             // One sample per horizontal pixel is all a plot can show.
             history_cap: width.max(32) as usize,
+            art: None,
+            focus: None,
         })
     }
 
     pub fn render(&mut self, canvas: &mut Canvas, theme: &Theme, m: &Metrics) -> RenderReport {
         let mut report = RenderReport::default();
         self.record_history(theme, m);
+        self.pick_focus(theme, m);
         canvas.clear(theme.background);
 
         let margin = theme.margin;
@@ -146,15 +182,16 @@ impl Renderer {
         let n = cols.count;
         let mut top = vec![margin; n];
         let mut bottom = vec![canvas.height().saturating_sub(margin); n];
+        let mut used = margin;
 
         // Bottom-anchored sections are placed first so the top flows know
         // where they have to stop.
-        for sec in theme.sections.iter().rev() {
+        for (i, sec) in theme.sections.iter().enumerate().rev() {
             if sec.anchor != Anchor::Bottom || !self.section_visible(sec, m) {
                 continue;
             }
             let (x, w, span) = cols.place(sec);
-            let h = self.section(canvas, sec, m, x, 0, w, false);
+            let h = self.tile(canvas, theme, i, m, x, 0, w, None);
             // A spanning section has to clear the lowest of the columns it covers.
             let y = span
                 .clone()
@@ -162,18 +199,18 @@ impl Renderer {
                 .min()
                 .unwrap_or(margin)
                 .saturating_sub(h);
-            self.section(canvas, sec, m, x, y, w, true);
+            self.tile(canvas, theme, i, m, x, y, w, Some(h));
             for c in span {
                 bottom[c] = y.saturating_sub(sec.gap);
             }
         }
 
-        for sec in &theme.sections {
+        for (i, sec) in theme.sections.iter().enumerate() {
             if sec.anchor != Anchor::Top || !self.section_visible(sec, m) {
                 continue;
             }
             let (x, w, span) = cols.place(sec);
-            let h = self.section(canvas, sec, m, x, 0, w, false);
+            let mut h = self.tile(canvas, theme, i, m, x, 0, w, None);
             // Start below everything already in any column it covers.
             let y = span.clone().map(|c| top[c]).max().unwrap_or(margin);
             let floor = span.clone().map(|c| bottom[c]).min().unwrap_or(0);
@@ -184,7 +221,11 @@ impl Renderer {
                     .push(sec.title.clone().unwrap_or_else(|| "untitled".into()));
                 continue;
             }
-            self.section(canvas, sec, m, x, y, w, true);
+            if sec.grow {
+                h = floor - y;
+            }
+            self.tile(canvas, theme, i, m, x, y, w, Some(h));
+            used = used.max(y + h);
             for c in span {
                 top[c] = y + h + sec.gap;
             }
@@ -192,12 +233,9 @@ impl Renderer {
 
         // The report speaks for the tightest column, which is the one that
         // decides whether the theme fits.
-        report.used_height = top
-            .iter()
-            .copied()
-            .max()
-            .unwrap_or(margin)
-            .saturating_sub(margin);
+        // Measured to the last pixel drawn: the gap after the last section is
+        // not space the theme needs.
+        report.used_height = used.saturating_sub(margin);
         report.available_height = bottom
             .iter()
             .copied()
@@ -226,6 +264,72 @@ impl Renderer {
         }
     }
 
+    /// The framed section that gets `focus_color`: the busiest one, like the
+    /// window with focus on the desktop. A section at zero load never takes it.
+    fn pick_focus(&mut self, theme: &Theme, m: &Metrics) {
+        if theme.focus_color.is_none() {
+            self.focus = None;
+            return;
+        }
+        let loads: Vec<(usize, f32)> = theme
+            .sections
+            .iter()
+            .enumerate()
+            .filter(|(_, s)| s.frame && self.section_visible(s, m))
+            .map(|(i, s)| (i, self.section_load(s, m)))
+            .filter(|(_, l)| *l > 0.0)
+            .collect();
+        let best = loads.iter().copied().reduce(|a, b| if b.1 > a.1 { b } else { a });
+        let held = self.focus.and_then(|f| loads.iter().copied().find(|(i, _)| *i == f));
+        self.focus = match (held, best) {
+            (Some(h), Some(b)) if h.1 + FOCUS_HYSTERESIS >= b.1 => Some(h.0),
+            (_, b) => b.map(|b| b.0),
+        };
+    }
+
+    /// The 0..=1 figure a section's colour ramp and its claim on the focus
+    /// react to.
+    fn section_load(&self, sec: &Section, m: &Metrics) -> f32 {
+        sec.color_from
+            .as_ref()
+            .and_then(|k| m.num(k).map(|v| v as f32))
+            .or_else(|| sec.value.as_ref().and_then(|v| self.load_of(&v.template, m)))
+            .unwrap_or(0.0)
+    }
+
+    /// A section inside its frame, when it has one. `stretch` is `None` to
+    /// only measure, or the height to draw it at, if that is taller.
+    fn tile(
+        &mut self,
+        canvas: &mut Canvas,
+        theme: &Theme,
+        i: usize,
+        m: &Metrics,
+        x: u16,
+        y: u16,
+        w: u16,
+        stretch: Option<u16>,
+    ) -> u16 {
+        let sec = &theme.sections[i];
+        let draw = stretch.is_some();
+        if !sec.frame {
+            return self.section(canvas, sec, m, x, y, w, draw);
+        }
+        let inset = theme.frame_width + sec.padding;
+        let inner = self.section(canvas, sec, m, x + inset, y + inset, w.saturating_sub(2 * inset), draw);
+        // The last row's trailing space would stack on the bottom padding and
+        // leave it deeper than the top one.
+        let h = (inner.saturating_sub(ROW_TRAIL) + 2 * inset).max(stretch.unwrap_or(0));
+        if draw {
+            let color = match theme.focus_color {
+                Some(c) if self.focus == Some(i) => c,
+                _ => theme.frame_color,
+            };
+            outline(canvas, Rect::new(x, y, w, h), theme.frame_width, color);
+        }
+        h
+    }
+
     fn section_visible(&self, sec: &Section, m: &Metrics) -> bool {
         match &sec.require {
             Some(key) => m.has(key),
@@ -249,12 +353,7 @@ impl Renderer {
 
         if sec.title.is_some() || sec.value.is_some() {
             if draw {
-                let load = sec
-                    .color_from
-                    .as_ref()
-                    .and_then(|k| m.num(k).map(|v| v as f32))
-                    .or_else(|| sec.value.as_ref().and_then(|v| self.load_of(&v.template, m)))
-                    .unwrap_or(0.0);
+                let load = self.section_load(sec, m);
                 let color = sec.color.resolve(load);
                 if let Some(title) = &sec.title {
                     let title = resolve_label(title, m);
@@ -264,7 +363,7 @@ impl Renderer {
                         x as i32,
                         cursor as i32,
                         sec.title_size,
-                        self.text_color(Style::Bold, None, 0.0, color),
+                        self.text_color(Style::Bold, sec.title_color.as_ref(), load, color),
                         Align::Left,
                         VAlign::Top,
                     );
@@ -321,15 +420,25 @@ impl Renderer {
             }
 
             Row::Text { left, right } => {
+                // Only the left item wraps; every line past the first adds its
+                // own height below the row.
+                let extra = match left {
+                    Some(t) if t.lines > 1 => {
+                        let n = self.lines_of(t, m, content).len().max(1) as u16;
+                        (n - 1) * (t.size + 4)
+                    }
+                    _ => 0,
+                };
                 let h = left
                     .as_ref()
                     .map(|t| t.size)
                     .max(right.as_ref().map(|t| t.size))
                     .unwrap_or(11)
-                    + 4;
+                    + 4
+                    + extra;
                 if draw {
                     if let Some(t) = left {
-                        self.draw_text_item(canvas, t, m, sec, x as i32, y, Align::Left);
+                        self.draw_text_item(canvas, t, m, sec, x as i32, y, Align::Left, content);
                     }
                     if let Some(t) = right {
                         self.draw_text_item(
@@ -340,6 +449,7 @@ impl Renderer {
                             (x + content) as i32,
                             y,
                             Align::Right,
+                            content,
                         );
                     }
                 }
@@ -361,6 +471,20 @@ impl Renderer {
                 height + 4
             }
 
+            Row::Art { metric, max } => {
+                // Cuadrada y a lo ancho de su columna: una caratula no es una
+                // medida, es el disco. El hueco se reserva aunque no haya
+                // imagen todavia, para que el resto no baile.
+                let side = max.unwrap_or(content).min(content);
+                if draw {
+                    if let Some(img) = m.image(metric) {
+                        let scaled = self.art_for(img, side);
+                        canvas.blit_image(x, y, scaled);
+                    }
+                }
+                side + 4
+            }
+
             Row::Cores {
                 metric,
                 height,
@@ -373,6 +497,9 @@ impl Renderer {
                         let gap = 2u16;
                         let bw = content.saturating_sub(gap * (n - 1)) / n;
                         let bw = bw.max(1);
+                        // Centred: the rounding remainder splits between the
+                        // two sides instead of piling up on the right.
+                        let x = x + content.saturating_sub(n * bw + gap * (n - 1)) / 2;
                         for (i, v) in values.iter().enumerate() {
                             let bx = x + i as u16 * (bw + gap);
                             if bx + bw > x + content {
@@ -439,6 +566,19 @@ impl Renderer {
         }
     }
 
+    /// The cover resampled to `side`, recomputed only when the track changes
+    /// (a different `Rc`) or the theme gives it a different box.
+    fn art_for(&mut self, img: &Rc<Image>, side: u16) -> &Image {
+        let stale = match &self.art {
+            Some((src, cached, _)) => !Rc::ptr_eq(src, img) || *cached != side,
+            None => true,
+        };
+        if stale {
+            self.art = Some((img.clone(), side, img.scaled(side, side)));
+        }
+        &self.art.as_ref().expect("just filled").2
+    }
+
     fn draw_text_item(
         &mut self,
         canvas: &mut Canvas,
@@ -448,11 +588,10 @@ impl Renderer {
         x: i32,
         y: u16,
         align: Align,
+        avail: u16,
     ) {
-        let Some(text) = resolve_template(&item.template, m) else {
-            return;
-        };
-        if text.trim().is_empty() {
+        let lines = self.lines_of(item, m, avail);
+        if lines.is_empty() {
             return;
         }
         let load = item
@@ -467,7 +606,26 @@ impl Renderer {
             Style::Bold => &mut self.bold,
             _ => &mut self.regular,
         };
-        font.draw(canvas, &text, x, y as i32, item.size, color, align, VAlign::Top);
+        for (i, line) in lines.iter().enumerate() {
+            let y = y as i32 + i as i32 * (item.size as i32 + 4);
+            font.draw(canvas, line, x, y, item.size, color, align, VAlign::Top);
+        }
+    }
+
+    /// What a text item shows, already cut to fit `avail`: one line, or up to
+    /// `lines` of them. Empty when there is nothing to draw.
+    fn lines_of(&mut self, item: &TextItem, m: &Metrics, avail: u16) -> Vec<String> {
+        let Some(text) = resolve_template(&item.template, m) else {
+            return Vec::new();
+        };
+        if text.trim().is_empty() {
+            return Vec::new();
+        }
+        let font = match item.style {
+            Style::Bold => &mut self.bold,
+            _ => &mut self.regular,
+        };
+        wrap(font, &text, item.size, avail, item.lines)
     }
 
     /// Explicit colour wins; otherwise dim text uses the palette's dim and
@@ -529,6 +687,58 @@ fn row_visible(entry: &RowEntry, m: &Metrics) -> bool {
         Some(key) => m.has(key),
         None => true,
     }
+}
+
+/// Cut a line down to what its column can actually show. Without this a long
+/// value — the title of a song, the model of a CPU — runs off the edge of the
+/// panel and gets sliced mid-glyph.
+///
+/// ponytail: mide una vez por caracter sobrante, O(n^2) en el peor caso. Solo
+/// entra cuando el texto ya no cabe, y ahi n son dos docenas de letras.
+fn ellipsize(font: &mut Font, text: &str, size: u16, avail: u16) -> String {
+    let avail = avail as f32;
+    if avail <= 0.0 || font.measure(text, size) <= avail {
+        return text.to_string();
+    }
+    let mut s = text.to_string();
+    while !s.is_empty() && font.measure(&format!("{}\u{2026}", s.trim_end()), size) > avail {
+        s.pop();
+    }
+    format!("{}\u{2026}", s.trim_end())
+}
+
+/// Break `text` at spaces into at most `max` lines that fit `avail`; whatever
+/// is left over goes on the last one, cut with an ellipsis.
+fn wrap(font: &mut Font, text: &str, size: u16, avail: u16, max: u16) -> Vec<String> {
+    if max <= 1 {
+        return vec![ellipsize(font, text, size, avail)];
+    }
+    let mut lines = Vec::new();
+    let mut words = text.split_whitespace().peekable();
+    while lines.len() + 1 < max as usize {
+        let mut line = String::new();
+        while let Some(w) = words.peek() {
+            let next = match line.is_empty() {
+                true => w.to_string(),
+                false => format!("{line} {w}"),
+            };
+            // A word wider than the line still goes on its own and is cut below.
+            if !line.is_empty() && font.measure(&next, size) > avail as f32 {
+                break;
+            }
+            line = next;
+            words.next();
+        }
+        if line.is_empty() {
+            break;
+        }
+        lines.push(line);
+    }
+    let rest: Vec<&str> = words.collect();
+    if !rest.is_empty() {
+        lines.push(rest.join(" "));
+    }
+    lines.into_iter().map(|l| ellipsize(font, &l, size, avail)).collect()
 }
 
 /// Blend a series colour towards the track to get a readable fill.
@@ -611,7 +821,8 @@ fn eval_expr(expr: &str, m: &Metrics) -> Option<String> {
     match m.get(&key)? {
         Value::Num(v) => Some(format_value(*v, formatter.as_deref().unwrap_or("int"))),
         Value::Text(t) => Some(t.clone()),
-        Value::Series(_) => None,
+        // Ni una serie ni una imagen son texto: las dibuja su propia fila.
+        Value::Series(_) | Value::Image(_) => None,
     }
 }
 
@@ -665,7 +876,9 @@ pub fn referenced_metrics(theme: &Theme) -> Vec<String> {
                         }
                     }
                 }
-                Row::Bar { metric, .. } | Row::Cores { metric, .. } => out.push(metric.clone()),
+                Row::Bar { metric, .. }
+                | Row::Cores { metric, .. }
+                | Row::Art { metric, .. } => out.push(metric.clone()),
                 Row::Plot { metrics, .. } => out.extend(metrics.iter().cloned()),
                 Row::Rule(_) | Row::Gap(_) => {}
             }
@@ -713,6 +926,10 @@ mod tests {
             background: [0, 0, 0],
             columns,
             column_gap: gap,
+            column_widths: Vec::new(),
+            frame_width: 2,
+            frame_color: [0x2c, 0x2c, 0x2c],
+            focus_color: None,
             sections: Vec::new(),
         }
     }
@@ -721,6 +938,7 @@ mod tests {
         Section {
             title: None,
             title_size: 15,
+            title_color: None,
             value: None,
             color: ColorSpec::Fixed([255, 255, 255]),
             color_from: None,
@@ -729,8 +947,60 @@ mod tests {
             column,
             span,
             gap: 6,
+            frame: false,
+            padding: 8,
+            grow: false,
             rows: Vec::new(),
         }
+    }
+
+    #[test]
+    fn focus_goes_to_the_busiest_frame_and_holds_through_small_swings() {
+        let mut t = theme_with(1, 10);
+        t.focus_color = Some([0xb8, 0x45, 0x5a]);
+        for key in ["a", "b"] {
+            let mut s = section(0, false);
+            s.frame = true;
+            s.color_from = Some(key.into());
+            t.sections.push(s);
+        }
+        let mut r = Renderer::new(None, None, 480).unwrap();
+        let mut canvas = Canvas::new(480, 320, [0, 0, 0]);
+        let mut frame = |r: &mut Renderer, a: f64, b: f64| {
+            let mut m = Metrics::new();
+            m.set_num("a", a);
+            m.set_num("b", b);
+            r.render(&mut canvas, &t, &m);
+            r.focus
+        };
+        assert_eq!(frame(&mut r, 0.5, 0.3), Some(0));
+        // Apenas por encima: el foco no salta.
+        assert_eq!(frame(&mut r, 0.5, 0.53), Some(0));
+        assert_eq!(frame(&mut r, 0.5, 0.7), Some(1));
+        // Nada cargado, nadie con foco.
+        assert_eq!(frame(&mut r, 0.0, 0.0), None);
+    }
+
+    #[test]
+    fn a_growing_frame_reaches_down_to_the_section_below() {
+        let mut t = theme_with(1, 10);
+        let mut top = section(0, false);
+        top.frame = true;
+        top.grow = true;
+        let mut foot = section(0, false);
+        foot.anchor = Anchor::Bottom;
+        foot.rows.push(RowEntry { require: None, row: Row::Gap(20) });
+        t.sections = vec![top, foot];
+        let mut r = Renderer::new(None, None, 480).unwrap();
+        let mut canvas = Canvas::new(480, 320, [0, 0, 0]);
+        r.render(&mut canvas, &t, &Metrics::new());
+        // El pie ocupa 292..312 y deja 6 de hueco: el marco baja hasta 286.
+        let px = |y: u16| {
+            let i = (y as usize * 480 + 8) * 3;
+            canvas.bytes()[i..i + 3].to_vec()
+        };
+        assert_eq!(px(285), vec![0x2c, 0x2c, 0x2c]);
+        assert_eq!(px(286), vec![0, 0, 0]);
     }
 
     #[test]
@@ -751,11 +1021,46 @@ mod tests {
     }
 
     #[test]
+    fn weights_split_the_content_unevenly() {
+        let mut t = theme_with(2, 14);
+        t.column_widths = vec![2, 3];
+        let cols = Columns::new(&t, 10, 460);
+        // 460 - 14 de hueco = 446, repartido 2:3.
+        assert_eq!(cols.place(&section(0, false)), (10, 178, 0..1));
+        assert_eq!(cols.place(&section(1, false)), (202, 267, 1..2));
+    }
+
+    #[test]
     fn a_gap_wider_than_the_panel_falls_back_to_one_column() {
         // Better a cramped single column than an underflowed width.
         let cols = Columns::new(&theme_with(2, 600), 8, 464);
         assert_eq!(cols.count, 1);
         assert_eq!(cols.place(&section(1, false)), (8, 464, 0..1));
+    }
+
+    #[test]
+    fn long_text_is_cut_to_the_column_instead_of_overflowing() {
+        let mut r = Renderer::new(None, None, 480).unwrap();
+        let long = "Un titulo absurdamente largo que no cabe ni de lejos en el panel";
+        let cut = ellipsize(&mut r.regular, long, 32, 460);
+        assert!(cut.ends_with('\u{2026}'), "should end in an ellipsis: {cut}");
+        assert!(r.regular.measure(&cut, 32) <= 460.0, "still too wide: {cut}");
+        // Lo que ya cabe se deja tal cual, sin puntos suspensivos.
+        assert_eq!(ellipsize(&mut r.regular, "corto", 32, 460), "corto");
+    }
+
+    #[test]
+    fn wrapped_text_breaks_at_spaces_and_cuts_only_the_last_line() {
+        let mut r = Renderer::new(None, None, 480).unwrap();
+        let long = "Un titulo absurdamente largo que no cabe ni de lejos en el panel";
+        let lines = wrap(&mut r.regular, long, 20, 200, 3);
+        assert_eq!(lines.len(), 3);
+        for l in &lines {
+            assert!(r.regular.measure(l, 20) <= 200.0, "too wide: {l}");
+        }
+        assert!(!lines[0].ends_with('\u{2026}') && lines[2].ends_with('\u{2026}'));
+        // Lo que cabe en una linea se queda en una.
+        assert_eq!(wrap(&mut r.regular, "Kid A", 20, 200, 3), vec!["Kid A"]);
     }
 
     #[test]
@@ -801,3 +1106,4 @@ mod tests {
         );
     }
 }
+

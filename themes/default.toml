@@ -1,132 +1,141 @@
-# Tema por defecto de turing-monitor: "hoja de lecturas".
+# Tema por defecto de turing-monitor: "workspace".
 #
-# El mismo papel de laboratorio de antes, pero sin la cinta: se quito el
-# registrador de arriba y el sitio que ocupaba se lo reparten las cifras, que
-# es lo que de verdad se lee de reojo en una pantalla de 3,5 pulgadas.
+# El panel como un escritorio mas de Hyprland, con el tema del sistema (Mono
+# Burgundy, ~/.config/theme/palette.toml): arriba una barra como la de
+# waybar, y cada magnitud es una ventana tileada con borde de 2 px, esquinas
+# rectas y los mismos huecos que hyprland.lua (gaps_out 10, 5 + 5 dentro).
 #
-# Lo que ordena la hoja es la escala tipografica, no las cajas: cada magnitud
-# se escribe grande, con su lectura secundaria debajo y una regla llena que
-# hace de medida y de clave de color. Nada lleva marco.
+# El borde en bordo es el foco, igual que en el escritorio: siempre lo tiene
+# una sola ventana, la mas cargada, y solo cambia de mano cuando otra la
+# supera con claridad. De un vistazo se sabe que esta trabajando.
 #
-# Todo el texto va en grafito y el color se reserva a las reglas. El rojo no
-# pertenece a ningun canal, solo aparece cuando algo se pasa de rosca.
+# Monocromo estricto, como la paleta ANSI del sistema: nada se distingue por
+# color, todo por brillo. El bordo significa foco o alarma y nada mas; por
+# eso cifras, barras y temperaturas solo lo alcanzan cuando se pasan de rosca.
 #
-# Pensado para la pantalla en horizontal (480x320): requiere
-# `orientation = landscape`. Nada lleva coordenadas absolutas.
+# Apaisado (480x320): requiere `orientation = landscape`. Las dos filas de
+# ventanas miden lo mismo porque la de abajo crece hasta el pie (`grow`).
 
 [theme]
-name = "reading-sheet"
+name = "workspace"
 author = "turing-lcd-rs"
-margin = 6
-background = "paper"
+margin = 10
+background = "base"
 columns = 2
-column_gap = 14
+column_gap = 10
+frame_width = 2
+frame_color = "line"
+focus_color = "accent"
 
 [palette]
-# El papel y la reticula impresa. "panel" es el fondo por defecto de barras,
-# asi que es la reticula quien lo ocupa.
-paper = "#e6e2d6"
-panel = "#cfc9b8"
-# Grafito para todo el texto, mas claro para las anotaciones.
-ink   = "#26251f"
-faint = "#6b675a"
-# Gris para las reglas impresas: la cabecera y el pie de FPS.
-line  = "#a29c8b"
-# El unico rojo del tema: solo aparece cuando algo se pasa de rosca.
-alarm = "#9b2c16"
-# Las tintas de cada canal. Solo pintan reglas, nunca texto.
-cpu   = "#1f5673"
-gpu   = "#7d3f7d"
-ram   = "#3d6b4a"
-vram  = "#8a5a1e"
+# Copiados tal cual de ~/.config/theme/palette.toml.
+base   = "#0b0b0b"
+line   = "#2c2c2c"
+dim    = "#505050"
+muted  = "#8a8a8a"
+fg     = "#c8c8c8"
+bright = "#ededed"
+accent = "#b8455a"
 
-# ----------------------------------------------------------- cabecera
-# La unica linea de la hoja que no es una medida: quien es esta maquina y
-# cuanto lleva encendida. La regla de debajo la separa de las lecturas.
+# ----------------------------------------------------------- la barra
+# Como waybar: sin marco, una linea de 1 px debajo. Quien es esta maquina y
+# cuanto lleva encendida.
 [[section]]
 span = true
-gap = 8
+gap = 10
 rows = [
-  { text = "sys.hostname", size = 22, style = "bold", color = "ink",
-    right = "up {sys.uptime|uptime}", right_size = 14, right_color = "faint" },
+  { text = "sys.hostname", size = 14, color = "fg",
+    right = "up {sys.uptime|uptime}", right_size = 14, right_color = "muted" },
   { rule = true, track = "line" },
 ]
 
-# ----------------------------------------------------------- las lecturas
-# Cuatro magnitudes a dos columnas. Cada una: titulo y porcentaje en la misma
-# linea, la lectura secundaria debajo y la regla al pie.
+# ----------------------------------------------------------- las ventanas
+# Cuatro ventanas iguales. Arriba el nombre en gris y la cifra a la derecha,
+# como el titulo y el contenido de una ventana; debajo la lectura secundaria
+# y una barra fina. La carga de `color_from` decide quien se lleva el foco.
 [[section]]
 column = 1
-title = "CPU"
-title_size = 22
+frame = true
+title = "cpu"
+title_size = 14
+title_color = "muted"
 value = "cpu.usage | percent"
-value_size = 40
-color = "ink -> alarm @ 0.85"
-gap = 8
+value_size = 34
+color = "bright -> accent @ 0.85"
+color_from = "cpu.usage"
+gap = 10
 rows = [
-  # La temperatura es lo unico del panel que compite en cuerpo con el
-  # porcentaje: si algo se esta cociendo, se ve antes que se lee. color_from
-  # es obligatorio aqui — la rampa necesita una fraccion 0..1 y cpu.temp son
-  # grados, que saturarian el rojo siempre.
-  { text = "cpu.temp | celsius", size = 28,
-    color = "ink -> alarm @ 0.7", color_from = "cpu.temp_ratio",
-    right = "cpu.freq | ghz", right_size = 14, right_color = "faint" },
-  { bar = "cpu.usage", height = 14, color = "cpu" },
+  # color_from es obligatorio: la rampa quiere una fraccion y cpu.temp son
+  # grados, que saturarian el bordo siempre.
+  { text = "cpu.temp | celsius", size = 16,
+    color = "fg -> accent @ 0.7", color_from = "cpu.temp_ratio",
+    right = "cpu.freq | ghz", right_size = 14, right_color = "muted" },
+  { bar = "cpu.usage", height = 7, color = "fg -> accent @ 0.85", track = "line" },
 ]
 
 [[section]]
 column = 1
-title = "GPU"
-title_size = 22
+frame = true
+grow = true
+title = "gpu"
+title_size = 14
+title_color = "muted"
 value = "gpu.usage | percent"
-value_size = 40
-color = "ink -> alarm @ 0.85"
+value_size = 34
+color = "bright -> accent @ 0.85"
+color_from = "gpu.usage"
 require = "gpu.usage"
+gap = 10
 rows = [
-  { text = "gpu.temp | celsius", size = 28,
-    color = "ink -> alarm @ 0.7", color_from = "gpu.temp_ratio",
-    # Sin dato a la derecha: el driver no expone frecuencia de GPU y repetir
-    # aqui la VRAM, que ya tiene su propia lectura, seria ruido.
-    },
-  { bar = "gpu.usage", height = 14, color = "gpu" },
+  { text = "gpu.temp | celsius", size = 16,
+    color = "fg -> accent @ 0.7", color_from = "gpu.temp_ratio" },
+  { bar = "gpu.usage", height = 7, color = "fg -> accent @ 0.85", track = "line" },
 ]
 
 [[section]]
 column = 2
-title = "RAM"
-title_size = 22
+frame = true
+title = "ram"
+title_size = 14
+title_color = "muted"
 value = "mem.usage | percent"
-value_size = 40
-color = "ink -> alarm @ 0.85"
-gap = 8
+value_size = 34
+color = "bright -> accent @ 0.85"
+color_from = "mem.usage"
+gap = 10
 rows = [
-  { text = "{mem.used|bytes} / {mem.total|bytes}", size = 20, color = "faint" },
-  { bar = "mem.usage", height = 14, color = "ram" },
+  { text = "{mem.used|bytes} / {mem.total|bytes}", size = 16, color = "fg" },
+  { bar = "mem.usage", height = 7, color = "fg -> accent @ 0.85", track = "line" },
 ]
 
 [[section]]
 column = 2
-title = "VRAM"
-title_size = 22
+frame = true
+grow = true
+title = "vram"
+title_size = 14
+title_color = "muted"
 value = "gpu.vram_usage | percent"
-value_size = 40
-color = "ink -> alarm @ 0.85"
+value_size = 34
+color = "bright -> accent @ 0.85"
+color_from = "gpu.vram_usage"
 require = "gpu.vram_usage"
+gap = 10
 rows = [
-  { text = "{gpu.vram_used|bytes} / {gpu.vram_total|bytes}", size = 20, color = "faint" },
-  { bar = "gpu.vram_usage", height = 14, color = "vram" },
+  { text = "{gpu.vram_used|bytes} / {gpu.vram_total|bytes}", size = 16, color = "fg" },
+  { bar = "gpu.vram_usage", height = 7, color = "fg -> accent @ 0.85", track = "line" },
 ]
 
 # ----------------------------------------------------------- los hilos
-# El pie: una barra por hilo de CPU, el unico dato del panel que no cabe en
-# una cifra. Debajo de las lecturas y a todo el ancho, con el modelo y el
-# load como anotacion al margen.
+# Una ventana ancha al pie con una barra por hilo, lo unico que no cabe en
+# una cifra. Sin `color_from`: no compite por el foco, lo que hay dentro ya
+# esta contado en la ventana de CPU.
 [[section]]
 span = true
-gap = 6
+anchor = "bottom"
+frame = true
 rows = [
-  { rule = true, track = "line" },
-  { text = "cpu.model", size = 14, color = "faint",
-    right = "load {sys.load}", right_size = 14, right_color = "faint" },
-  { cores = "cpu.cores", height = 32, color = "cpu" },
+  { text = "cpu.model", size = 13, color = "muted",
+    right = "load {sys.load}", right_size = 13, right_color = "muted" },
+  { cores = "cpu.cores", height = 47, color = "fg -> accent @ 0.9", track = "line" },
 ]

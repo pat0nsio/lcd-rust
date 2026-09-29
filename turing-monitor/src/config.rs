@@ -19,6 +19,8 @@ pub struct Config {
     pub font_bold: Option<String>,
     /// Theme file; `None` uses the one built into the binary.
     pub theme: Option<String>,
+    /// Second theme. Con el puesto, SIGUSR1 alterna entre los dos.
+    pub theme_alt: Option<String>,
     pub cpu_temp_chip: String,
     pub cpu_temp_label: Option<String>,
     /// Blank the panel on exit instead of leaving the last frame up.
@@ -37,6 +39,7 @@ impl Default for Config {
             font_regular: None,
             font_bold: None,
             theme: None,
+            theme_alt: None,
             cpu_temp_chip: "k10temp".into(),
             cpu_temp_label: Some("Tctl".into()),
             screen_off_on_exit: false,
@@ -82,6 +85,7 @@ impl Config {
                 "font_regular" => c.font_regular = opt(v),
                 "font_bold" => c.font_bold = opt(v),
                 "theme" => c.theme = opt(v),
+                "theme_alt" => c.theme_alt = opt(v),
                 "cpu_temp_chip" => c.cpu_temp_chip = v.to_string(),
                 "cpu_temp_label" => c.cpu_temp_label = opt(v),
                 "screen_off_on_exit" => c.screen_off_on_exit = parse_bool(k, v)?,
