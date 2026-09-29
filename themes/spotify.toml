@@ -4,8 +4,8 @@
 # Burgundy), para que SUPER + ALT + M se sienta como cambiar de workspace y
 # no de aplicacion.
 #
-# Tres ventanas: la caratula, los creditos y el transporte. El foco en bordo
-# es de la caratula mientras suena; en pausa se apaga y todo queda en gris,
+# Tres ventanas: la caratula, los creditos y el transporte. La caratula se
+# enmarca en bordo mientras suena; en pausa se apaga y todo queda en gris,
 # igual que waybar atenua el modulo de mpris.
 #
 # Sin reproductor la barra de arriba sigue ahi y dice "sin reproductor": las
@@ -24,8 +24,8 @@ columns = 2
 column_widths = [109, 116]
 column_gap = 10
 frame_width = 2
-frame_color = "line"
-focus_color = "accent"
+# La "carga" de la caratula es spotify.playing, 0 o 1: bordo mientras suena.
+frame_color = "line -> accent @ 0.85"
 
 [palette]
 base   = "#0b0b0b"

@@ -128,13 +128,7 @@ pub struct Renderer {
     /// The cover, already resampled to the box it is drawn in. Kept until the
     /// track or the layout changes, so a frame is a memcpy and nothing else.
     art: Option<(Rc<Image>, u16, Image)>,
-    /// Index of the framed section drawn in the theme's `focus_color`.
-    focus: Option<usize>,
 }
-
-/// How much busier another section must be to take the focus away, so two
-/// tiles at about the same load do not trade it every frame.
-const FOCUS_HYSTERESIS: f32 = 0.05;
 
 /// Every row leaves this much space under itself.
 const ROW_TRAIL: u16 = 4;
@@ -160,14 +154,12 @@ impl Renderer {
             // One sample per horizontal pixel is all a plot can show.
             history_cap: width.max(32) as usize,
             art: None,
-            focus: None,
         })
     }
 
     pub fn render(&mut self, canvas: &mut Canvas, theme: &Theme, m: &Metrics) -> RenderReport {
         let mut report = RenderReport::default();
         self.record_history(theme, m);
-        self.pick_focus(theme, m);
         canvas.clear(theme.background);
 
         let margin = theme.margin;
@@ -186,12 +178,12 @@ impl Renderer {
 
         // Bottom-anchored sections are placed first so the top flows know
         // where they have to stop.
-        for (i, sec) in theme.sections.iter().enumerate().rev() {
+        for sec in theme.sections.iter().rev() {
             if sec.anchor != Anchor::Bottom || !self.section_visible(sec, m) {
                 continue;
             }
             let (x, w, span) = cols.place(sec);
-            let h = self.tile(canvas, theme, i, m, x, 0, w, None);
+            let h = self.tile(canvas, theme, sec, m, x, 0, w, None);
             // A spanning section has to clear the lowest of the columns it covers.
             let y = span
                 .clone()
@@ -199,18 +191,18 @@ impl Renderer {
                 .min()
                 .unwrap_or(margin)
                 .saturating_sub(h);
-            self.tile(canvas, theme, i, m, x, y, w, Some(h));
+            self.tile(canvas, theme, sec, m, x, y, w, Some(h));
             for c in span {
                 bottom[c] = y.saturating_sub(sec.gap);
             }
         }
 
-        for (i, sec) in theme.sections.iter().enumerate() {
+        for sec in &theme.sections {
             if sec.anchor != Anchor::Top || !self.section_visible(sec, m) {
                 continue;
             }
             let (x, w, span) = cols.place(sec);
-            let mut h = self.tile(canvas, theme, i, m, x, 0, w, None);
+            let mut h = self.tile(canvas, theme, sec, m, x, 0, w, None);
             // Start below everything already in any column it covers.
             let y = span.clone().map(|c| top[c]).max().unwrap_or(margin);
             let floor = span.clone().map(|c| bottom[c]).min().unwrap_or(0);
@@ -224,7 +216,7 @@ impl Renderer {
             if sec.grow {
                 h = floor - y;
             }
-            self.tile(canvas, theme, i, m, x, y, w, Some(h));
+            self.tile(canvas, theme, sec, m, x, y, w, Some(h));
             used = used.max(y + h);
             for c in span {
                 top[c] = y + h + sec.gap;
@@ -264,31 +256,7 @@ impl Renderer {
         }
     }
 
-    /// The framed section that gets `focus_color`: the busiest one, like the
-    /// window with focus on the desktop. A section at zero load never takes it.
-    fn pick_focus(&mut self, theme: &Theme, m: &Metrics) {
-        if theme.focus_color.is_none() {
-            self.focus = None;
-            return;
-        }
-        let loads: Vec<(usize, f32)> = theme
-            .sections
-            .iter()
-            .enumerate()
-            .filter(|(_, s)| s.frame && self.section_visible(s, m))
-            .map(|(i, s)| (i, self.section_load(s, m)))
-            .filter(|(_, l)| *l > 0.0)
-            .collect();
-        let best = loads.iter().copied().reduce(|a, b| if b.1 > a.1 { b } else { a });
-        let held = self.focus.and_then(|f| loads.iter().copied().find(|(i, _)| *i == f));
-        self.focus = match (held, best) {
-            (Some(h), Some(b)) if h.1 + FOCUS_HYSTERESIS >= b.1 => Some(h.0),
-            (_, b) => b.map(|b| b.0),
-        };
-    }
-
-    /// The 0..=1 figure a section's colour ramp and its claim on the focus
-    /// react to.
+    /// The 0..=1 figure a section's colour ramps, frame included, react to.
     fn section_load(&self, sec: &Section, m: &Metrics) -> f32 {
         sec.color_from
             .as_ref()
@@ -303,14 +271,13 @@ impl Renderer {
         &mut self,
         canvas: &mut Canvas,
         theme: &Theme,
-        i: usize,
+        sec: &Section,
         m: &Metrics,
         x: u16,
         y: u16,
         w: u16,
         stretch: Option<u16>,
     ) -> u16 {
-        let sec = &theme.sections[i];
         let draw = stretch.is_some();
         if !sec.frame {
             return self.section(canvas, sec, m, x, y, w, draw);
@@ -321,10 +288,7 @@ impl Renderer {
         // leave it deeper than the top one.
         let h = (inner.saturating_sub(ROW_TRAIL) + 2 * inset).max(stretch.unwrap_or(0));
         if draw {
-            let color = match theme.focus_color {
-                Some(c) if self.focus == Some(i) => c,
-                _ => theme.frame_color,
-            };
+            let color = theme.frame_color.resolve(self.section_load(sec, m));
             outline(canvas, Rect::new(x, y, w, h), theme.frame_width, color);
         }
         h
@@ -928,8 +892,7 @@ mod tests {
             column_gap: gap,
             column_widths: Vec::new(),
             frame_width: 2,
-            frame_color: [0x2c, 0x2c, 0x2c],
-            focus_color: None,
+            frame_color: ColorSpec::Fixed([0x2c, 0x2c, 0x2c]),
             sections: Vec::new(),
         }
     }
@@ -955,30 +918,29 @@ mod tests {
     }
 
     #[test]
-    fn focus_goes_to_the_busiest_frame_and_holds_through_small_swings() {
+    fn a_frame_only_lights_up_when_its_section_is_loaded() {
         let mut t = theme_with(1, 10);
-        t.focus_color = Some([0xb8, 0x45, 0x5a]);
-        for key in ["a", "b"] {
-            let mut s = section(0, false);
-            s.frame = true;
-            s.color_from = Some(key.into());
-            t.sections.push(s);
-        }
+        t.frame_color = ColorSpec::Ramp {
+            from: [0x2c, 0x2c, 0x2c],
+            to: [0xb8, 0x45, 0x5a],
+            start: 0.85,
+        };
+        let mut s = section(0, false);
+        s.frame = true;
+        s.color_from = Some("a".into());
+        t.sections.push(s);
         let mut r = Renderer::new(None, None, 480).unwrap();
         let mut canvas = Canvas::new(480, 320, [0, 0, 0]);
-        let mut frame = |r: &mut Renderer, a: f64, b: f64| {
+        let mut corner = |a: f64| {
             let mut m = Metrics::new();
             m.set_num("a", a);
-            m.set_num("b", b);
             r.render(&mut canvas, &t, &m);
-            r.focus
+            let i = (8 * 480 + 8) * 3;
+            canvas.bytes()[i..i + 3].to_vec()
         };
-        assert_eq!(frame(&mut r, 0.5, 0.3), Some(0));
-        // Apenas por encima: el foco no salta.
-        assert_eq!(frame(&mut r, 0.5, 0.53), Some(0));
-        assert_eq!(frame(&mut r, 0.5, 0.7), Some(1));
-        // Nada cargado, nadie con foco.
-        assert_eq!(frame(&mut r, 0.0, 0.0), None);
+        // En reposo, gris como cualquier otra ventana; al tope, bordo.
+        assert_eq!(corner(0.5), vec![0x2c, 0x2c, 0x2c]);
+        assert_eq!(corner(1.0), vec![0xb8, 0x45, 0x5a]);
     }
 
     #[test]

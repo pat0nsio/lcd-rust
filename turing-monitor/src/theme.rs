@@ -40,10 +40,9 @@ struct Meta {
     column_gap: Option<u16>,
     /// Stroke of the frame round `frame = true` sections.
     frame_width: Option<u16>,
-    /// Frame colour; defaults to the palette's `line`.
+    /// Frame colour; defaults to the palette's `line`. A ramp follows each
+    /// section's own load, so a frame can light up only when it is busy.
     frame_color: Option<String>,
-    /// Frame colour of the one framed section with focus: the busiest.
-    focus_color: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -253,9 +252,7 @@ pub struct Theme {
     /// One weight per column; empty means equal shares.
     pub column_widths: Vec<u16>,
     pub frame_width: u16,
-    pub frame_color: Rgb,
-    /// `None` leaves every frame in `frame_color`: no section takes focus.
-    pub focus_color: Option<Rgb>,
+    pub frame_color: ColorSpec,
     pub sections: Vec<Section>,
 }
 
@@ -385,12 +382,10 @@ impl Theme {
             column_widths,
             frame_width: file.theme.frame_width.unwrap_or(2),
             frame_color: match &file.theme.frame_color {
-                Some(s) => palette.color(s)?,
-                None => palette.map.get("line").copied().unwrap_or([0x2c, 0x2c, 0x2c]),
-            },
-            focus_color: match &file.theme.focus_color {
-                Some(s) => Some(palette.color(s)?),
-                None => None,
+                Some(s) => palette.color_spec(s)?,
+                None => ColorSpec::Fixed(
+                    palette.map.get("line").copied().unwrap_or([0x2c, 0x2c, 0x2c]),
+                ),
             },
             sections,
         })

@@ -117,15 +117,10 @@ magnitud es una **ventana tileada** — borde de 2 px, esquinas rectas y los
 mismos huecos que Hyprland. **CPU y GPU** a la izquierda, **RAM y VRAM** a la
 derecha, y al pie una ventana ancha con una barra por hilo de CPU.
 
-**El borde bordó es el foco**, igual que en el escritorio: lo tiene siempre
-una sola ventana, la más cargada, y solo cambia de mano cuando otra la supera
-con claridad (5 puntos), para que no parpadee entre dos parecidas. De un
-vistazo se sabe qué está trabajando.
-
 **Monocromo estricto**, como la paleta ANSI del sistema: nada se distingue por
-color, todo por brillo. El bordó significa foco o alarma y nada más: cifras,
-barras e hilos solo lo alcanzan pasado el 85–90 %, y las temperaturas desde
-los 70 °C. Ojo al escribir una rampa sobre grados: `color_from` tiene que
+color, todo por brillo. **El bordó es solo alerta**: en reposo todas las
+ventanas son iguales, y marco, cifra y barra de una se encienden cuando pasa
+del 85 % (los hilos, del 90 %; las temperaturas, desde los 70 °C). Ojo al escribir una rampa sobre grados: `color_from` tiene que
 apuntar a `cpu.temp_ratio` / `gpu.temp_ratio`, porque la rampa espera una
 fracción 0..1 y los grados en crudo saturarían el bordó siempre.
 
@@ -142,7 +137,7 @@ primer plano: misma barra, mismos marcos, misma paleta — alternar entre los
 dos se siente como cambiar de workspace. Tres ventanas: la **carátula**,
 exactamente cuadrada; los **créditos**, con el título partido en hasta tres
 líneas en vez de cortado; y abajo el **transporte**, barra de avance y los
-dos tiempos. El foco bordó es de la carátula **mientras suena**; en pausa se
+dos tiempos. La carátula se enmarca en bordó **mientras suena**; en pausa se
 apaga, como waybar atenúa el módulo de mpris.
 
 Los datos salen de **MPRIS**, llamando a `busctl` una vez por refresco: un
@@ -261,12 +256,12 @@ cabecera de cada sección, que crece con la mayor de las dos. Por defecto son
 15 y 20, que es lo que valía antes de existir estas claves. El título toma el
 color de la sección salvo que `title_color` diga otro.
 
-**Marcos y foco.** `frame = true` dibuja un borde alrededor de la sección, como
-una ventana, con `padding` (8 por defecto) entre borde y contenido. El grosor
-y los colores son del tema: `frame_width` (2), `frame_color` (por defecto el
-`line` de la paleta) y `focus_color`. Con `focus_color` declarado, la sección
-enmarcada de mayor carga — la de `color_from`, o la de su `value` — se pinta
-con él; una sección a carga cero nunca lo toma. `grow = true` estira la
+**Marcos.** `frame = true` dibuja un borde alrededor de la sección, como una
+ventana, con `padding` (8 por defecto) entre borde y contenido. El grosor y
+el color son del tema: `frame_width` (2) y `frame_color` (por defecto el
+`line` de la paleta). `frame_color` acepta una rampa, `"line -> accent @
+0.85"`, que sigue la carga de cada sección — la de `color_from`, o la de su
+`value` —: así un marco solo se enciende cuando su sección se pasa de rosca. `grow = true` estira la
 sección hasta lo que tenga debajo en su columna, para que dos columnas de
 ventanas acaben a la misma altura.
 

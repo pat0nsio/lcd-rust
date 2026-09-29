@@ -5,13 +5,10 @@
 # waybar, y cada magnitud es una ventana tileada con borde de 2 px, esquinas
 # rectas y los mismos huecos que hyprland.lua (gaps_out 10, 5 + 5 dentro).
 #
-# El borde en bordo es el foco, igual que en el escritorio: siempre lo tiene
-# una sola ventana, la mas cargada, y solo cambia de mano cuando otra la
-# supera con claridad. De un vistazo se sabe que esta trabajando.
-#
 # Monocromo estricto, como la paleta ANSI del sistema: nada se distingue por
-# color, todo por brillo. El bordo significa foco o alarma y nada mas; por
-# eso cifras, barras y temperaturas solo lo alcanzan cuando se pasan de rosca.
+# color, todo por brillo. El bordo es solo alerta: en reposo todas las
+# ventanas son iguales, y marco, cifra y barra de una se encienden cuando
+# pasa del 85%; las temperaturas, desde los 70 grados.
 #
 # Apaisado (480x320): requiere `orientation = landscape`. Las dos filas de
 # ventanas miden lo mismo porque la de abajo crece hasta el pie (`grow`).
@@ -24,8 +21,8 @@ background = "base"
 columns = 2
 column_gap = 10
 frame_width = 2
-frame_color = "line"
-focus_color = "accent"
+# Gris en reposo; solo se enciende en bordo la ventana que pasa del 85%.
+frame_color = "line -> accent @ 0.85"
 
 [palette]
 # Copiados tal cual de ~/.config/theme/palette.toml.
@@ -52,7 +49,7 @@ rows = [
 # ----------------------------------------------------------- las ventanas
 # Cuatro ventanas iguales. Arriba el nombre en gris y la cifra a la derecha,
 # como el titulo y el contenido de una ventana; debajo la lectura secundaria
-# y una barra fina. La carga de `color_from` decide quien se lleva el foco.
+# y una barra fina. La carga de `color_from` es la que enciende el marco.
 [[section]]
 column = 1
 frame = true
@@ -128,8 +125,8 @@ rows = [
 
 # ----------------------------------------------------------- los hilos
 # Una ventana ancha al pie con una barra por hilo, lo unico que no cabe en
-# una cifra. Sin `color_from`: no compite por el foco, lo que hay dentro ya
-# esta contado en la ventana de CPU.
+# una cifra. Sin `color_from` su marco no se enciende nunca: lo que hay
+# dentro ya avisa en la ventana de CPU, y cada hilo se pinta solo.
 [[section]]
 span = true
 anchor = "bottom"
